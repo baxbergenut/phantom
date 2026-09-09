@@ -58,9 +58,9 @@ describe('Git safety adapter', () => {
   });
 
   it('blocks a dirty tree, wrong branch, and missing or unreachable remote', async () => {
-    await expect(
-      adapter.preflight({ ...project(), localPath: root }),
-    ).rejects.toMatchObject({ category: 'not_repository' });
+    await expect(adapter.preflight({ ...project(), localPath: root })).rejects.toMatchObject({
+      category: 'not_repository',
+    });
 
     writeFileSync(path.join(local, 'dirty.txt'), 'dirty\n');
     await expect(adapter.preflight(project())).rejects.toMatchObject({ category: 'dirty_tree' });
