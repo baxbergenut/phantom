@@ -614,26 +614,28 @@ and make normal installation, upgrading, backup, and troubleshooting manageable.
 
 Update this section at the end of every phase.
 
-- **Current completed phase:** Phase 3 — Codex execution, structured results, and
-  same-thread retries
+- **Current completed phase:** Phase 4 — Git synchronization, commit verification, and
+  direct push
 - **Bootstrap state:** Complete; local `main` tracks `origin/main` on GitHub
-- **Next phase:** Phase 4 — Git synchronization, commit verification, and direct push
-- **Last known good commit:** `171dc36` (Phase 3 implementation; a following
+- **Next phase:** Phase 5 — Live quota integration and reset-aware scheduling
+- **Last known good commit:** `7de9573` (Phase 4 implementation; a following
   bookkeeping commit records phase completion)
 - **How to run:** `npm install`, then `npm start`; open `http://127.0.0.1:4310`.
   For live-reload development, use `npm run dev` and open `http://127.0.0.1:4311`.
 - **How to test:** `npm run format:check`, `npm run lint`, `npm run typecheck`,
   `npm test`, and `npm run build`
-- **Database/schema version:** `0002_phase_three`
-- **Important active decisions:** Runtime execution uses `codex exec` behind the
-  scheduler's adapter with JSONL streaming and a versioned output schema. The
-  workspace-write sandbox and no-interactive-approval policy are explicit; Phase 3
-  prompts forbid pushes. Concise redacted events live in SQLite, while full redacted
-  logs have 14-day/100-execution retention beside the database. Normal failure gets
-  one persisted same-thread retry; restart recovery resumes the persisted thread.
+- **Database/schema version:** `0003_phase_four`
+- **Important active decisions:** Every new execution runs Git preflight through
+  argument-array process calls, synchronizes behind branches with fast-forward-only,
+  and blocks dirty, wrong-branch, missing/unreachable-remote, or diverged states.
+  Codex uses danger-full-access because workspace-write cannot create `.git/index.lock`;
+  enabled projects therefore receive a prominent direct-push warning. Completion is
+  independently fetched and verified before success, with local/remote SHAs, changed
+  files, and commit metadata persisted. Push verification failure consumes the one
+  persisted same-thread retry; force-push is never invoked or permitted by contract.
 - **Known issues or limitations:** Rate-limited work remains in `waiting_quota` until
-  Phase 5 adds reset-aware wakeup. Phase 4 must add Git preflight, fast-forward-only
-  synchronization, commit/push instructions, and independent remote verification.
+  Phase 5 adds reset-aware wakeup. Quota is not yet checked before dispatch, and the
+  complexity/model policy remains fixed until Phase 6.
 
 ## Phase Completion Log
 
@@ -721,4 +723,35 @@ Important decisions: Use the CLI rather than the SDK behind the existing executo
 Known limitations / follow-up: Phase 4 owns repository-state preflight,
   fast-forward-only sync, commit requirements, direct push, rejection recovery, and
   independent verification that the commit reached the configured remote branch.
+```
+
+### Phase 4
+
+```text
+Phase: 4 — Git synchronization, commit verification, and direct push
+Completed on: 2026-09-09
+Commit SHA: 7de9573
+Summary: Added an argument-array Git adapter; canonical path, repository, clean-tree,
+  branch, remote, reachability, compatibility, and divergence checks;
+  fast-forward-only synchronization; explicit commit/direct-push Codex instructions;
+  no-change and informative-commit enforcement; independent post-run fetch and remote
+  reachability verification; persisted Git metadata; same-thread rejected-push retry;
+  and prominent direct-push dashboard warnings and reports.
+Verification performed: Prettier check; ESLint; strict TypeScript checks; 36 tests
+  covering clean success, no change, non-repository, dirty tree, wrong branch, missing
+  and unreachable remotes, behind fast-forward, divergence, rejected push, same-thread
+  verification retry, persisted Git metadata, and all prior behavior; production
+  build; fresh `0003_phase_four` migration audit; npm audit (0 vulnerabilities);
+  production-source search found no force-push or hard-reset path; controlled real
+  Codex run created and normally pushed commit
+  426fc80422421b1c5d5b8341dbc54c3c2b89b7a9 to the private
+  baxbergenut/phantom-e2e-test repository, with independent local/remote verification.
+Important decisions: Use danger-full-access as the minimum Codex CLI sandbox capable
+  of writing `.git` and pushing; retain approval_policy=never for autonomous operation.
+  Put repository safety and remote verification outside Codex in the Git adapter.
+  Allow compatible local-ahead history, fast-forward local-behind history, and block
+  only divergence; never stash, reset, discard changes, or invoke force-push.
+Known limitations / follow-up: Phase 5 must add fresh quota gating, reserves,
+  reset-aware same-thread resume, usage deltas, and durable reset recovery before new
+  dispatches can account for live limits.
 ```
