@@ -93,9 +93,8 @@ boundaries or locked decisions must be recorded in this file.
 
 ## Phase status
 
-- [ ] Bootstrap prerequisite — Initialize or clone the Phantom Git repository, check
-  out `main`, and configure `origin` before beginning Phase 1. At the time this plan
-  was created, `C:\BBG\SoftEng\phantom` was not a Git repository.
+- [x] Bootstrap prerequisite — Phantom is initialized on `main`, with
+  `https://github.com/baxbergenut/phantom.git` configured as `origin`.
 - [ ] Phase 1 — Foundation, database, projects, and task board
 - [ ] Phase 2 — Persistent single-task scheduler and restart recovery
 - [ ] Phase 3 — Codex execution, structured results, and same-thread retries
@@ -581,10 +580,10 @@ and make normal installation, upgrading, backup, and troubleshooting manageable.
 Update this section at the end of every phase.
 
 - **Current completed phase:** None
-- **Bootstrap state:** Workspace is not yet a Git repository; initialize/clone it and
-  configure `origin` before Phase 1
+- **Bootstrap state:** Complete; local `main` tracks `origin/main` on GitHub
 - **Next phase:** Phase 1 — Foundation, database, projects, and task board
-- **Last known good commit:** Not yet created
+- **Last known good commit:** `4cf8691` (initial implementation plan; a later
+  bookkeeping commit records bootstrap completion)
 - **How to run:** Not yet implemented
 - **How to test:** Not yet implemented
 - **Database/schema version:** Not yet implemented
