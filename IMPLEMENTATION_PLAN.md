@@ -614,25 +614,26 @@ and make normal installation, upgrading, backup, and troubleshooting manageable.
 
 Update this section at the end of every phase.
 
-- **Current completed phase:** Phase 2 — Persistent single-task scheduler and restart
-  recovery
+- **Current completed phase:** Phase 3 — Codex execution, structured results, and
+  same-thread retries
 - **Bootstrap state:** Complete; local `main` tracks `origin/main` on GitHub
-- **Next phase:** Phase 3 — Codex execution, structured results, and same-thread retries
-- **Last known good commit:** `c2d8d40` (Phase 2 implementation; a following
+- **Next phase:** Phase 4 — Git synchronization, commit verification, and direct push
+- **Last known good commit:** `171dc36` (Phase 3 implementation; a following
   bookkeeping commit records phase completion)
 - **How to run:** `npm install`, then `npm start`; open `http://127.0.0.1:4310`.
   For live-reload development, use `npm run dev` and open `http://127.0.0.1:4311`.
 - **How to test:** `npm run format:check`, `npm run lint`, `npm run typecheck`,
   `npm test`, and `npm run build`
-- **Database/schema version:** `0001_phase_two`
-- **Important active decisions:** The in-process worker uses an immediate SQLite
-  transaction plus a singleton durable lease for acquisition; stale and gracefully
-  interrupted fake runs resume the same execution row and attempt; fake behavior is
-  selected with instruction markers; all status changes use an explicit transition
-  service and durable event rows
-- **Known issues or limitations:** The Phase 2 executor is intentionally fake and does
-  not modify repositories. Codex execution, retry policy, and streamed progress begin
-  in Phase 3; Windows service packaging remains deferred to Phase 8.
+- **Database/schema version:** `0002_phase_three`
+- **Important active decisions:** Runtime execution uses `codex exec` behind the
+  scheduler's adapter with JSONL streaming and a versioned output schema. The
+  workspace-write sandbox and no-interactive-approval policy are explicit; Phase 3
+  prompts forbid pushes. Concise redacted events live in SQLite, while full redacted
+  logs have 14-day/100-execution retention beside the database. Normal failure gets
+  one persisted same-thread retry; restart recovery resumes the persisted thread.
+- **Known issues or limitations:** Rate-limited work remains in `waiting_quota` until
+  Phase 5 adds reset-aware wakeup. Phase 4 must add Git preflight, fast-forward-only
+  synchronization, commit/push instructions, and independent remote verification.
 
 ## Phase Completion Log
 
@@ -692,4 +693,32 @@ Important decisions: One singleton SQLite lease protects global acquisition, bac
 Known limitations / follow-up: Execution is fake by design and supports instruction
   markers for deterministic testing. Phase 3 replaces it behind the executor adapter
   and adds Codex progress, cancellation, structured output, and same-thread retries.
+```
+
+### Phase 3
+
+```text
+Phase: 3 — Codex execution, structured results, and same-thread retries
+Completed on: 2026-09-09
+Commit SHA: 171dc36
+Summary: Added the `codex exec` adapter, startup capability/authentication checks,
+  explicit runtime policy, JSONL event parsing, immediate thread persistence,
+  versioned structured final results, token accounting, redacted bounded raw logs,
+  cancellation/timeout handling, one persisted same-thread retry, quota-failure
+  classification, restart thread resumption, APIs, and live dashboard reporting.
+Verification performed: Prettier check; ESLint; strict TypeScript checks; 29 tests
+  covering recorded JSONL parsing, schema semantics, success, malformed output,
+  same-thread retry, restart resumption, rate limit, timeout, cancellation, secret
+  redaction, scheduler persistence, and prior behavior; production build; fresh
+  `0002_phase_three` migration audit; npm audit (0 vulnerabilities); installed Codex
+  0.153.4 capability/authentication check; harmless real Codex run in a disposable
+  clean Git repository with validated output and no file or Git changes.
+Important decisions: Use the CLI rather than the SDK behind the existing executor
+  interface. Persist only concise events in SQLite and retain redacted JSONL outside
+  the database for 14 days/100 executions. Use workspace-write with approvals disabled
+  and explicitly forbid pushes until Phase 4. Recovery and normal retry both resume
+  the persisted Codex thread, and retry_count prevents retry multiplication.
+Known limitations / follow-up: Phase 4 owns repository-state preflight,
+  fast-forward-only sync, commit requirements, direct push, rejection recovery, and
+  independent verification that the commit reached the configured remote branch.
 ```
