@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -20,7 +20,7 @@ describe('Phase 1 API', () => {
     repositoryPath = path.join(root, 'project');
     mkdirSync(repositoryPath);
     execFileSync('git', ['init', '-b', 'main'], { cwd: repositoryPath, stdio: 'ignore' });
-    app = await createApp({ databasePath });
+    app = await createApp({ databasePath, dashboardRoot: false });
   });
 
   afterEach(async () => {
@@ -61,6 +61,19 @@ describe('Phase 1 API', () => {
 
     const version = await app.inject({ method: 'GET', url: '/api/version' });
     expect(version.json()).toEqual({ name: 'phantom', version: '0.1.0', phase: 1 });
+  });
+
+  it('serves the built dashboard from the production server', async () => {
+    await app.close();
+    const dashboardRoot = path.join(root, 'dashboard');
+    mkdirSync(dashboardRoot);
+    writeFileSync(path.join(dashboardRoot, 'index.html'), '<h1>Phantom dashboard</h1>');
+    app = await createApp({ databasePath, dashboardRoot });
+
+    const response = await app.inject({ method: 'GET', url: '/' });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('text/html');
+    expect(response.body).toContain('Phantom dashboard');
   });
 
   it('validates, creates, edits, toggles, lists, and deletes projects', async () => {
@@ -175,7 +188,7 @@ describe('Phase 1 API', () => {
     await app.inject({ method: 'PATCH', url: '/api/settings/worker', payload: { paused: true } });
     await app.close();
 
-    app = await createApp({ databasePath });
+    app = await createApp({ databasePath, dashboardRoot: false });
     expect(
       (await app.inject({ method: 'GET', url: '/api/projects' })).json<unknown[]>(),
     ).toHaveLength(1);

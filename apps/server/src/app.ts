@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 import cors from '@fastify/cors';
+import fastifyStatic from '@fastify/static';
 import {
   projectInputSchema,
   projectEnabledPatchSchema,
@@ -21,11 +24,13 @@ import { ProjectPathError, validateProjectPath } from './project-validation.js';
 
 interface AppOptions {
   databasePath?: string;
+  dashboardRoot?: string | false;
   migrationsFolder?: string;
   logger?: boolean;
 }
 
 const workerPausedKey = 'worker.paused';
+const defaultDashboardRoot = fileURLToPath(new URL('../../dashboard/dist', import.meta.url));
 
 export async function createApp(options: AppOptions = {}) {
   const database = openDatabase(options.databasePath, options.migrationsFolder);
@@ -262,6 +267,14 @@ export async function createApp(options: AppOptions = {}) {
       .run();
     return { paused, updatedAt };
   });
+
+  const dashboardRoot = options.dashboardRoot ?? defaultDashboardRoot;
+  if (dashboardRoot && existsSync(dashboardRoot)) {
+    await app.register(fastifyStatic, {
+      root: dashboardRoot,
+      prefix: '/',
+    });
+  }
 
   return app;
 }

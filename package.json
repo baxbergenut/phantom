@@ -17,7 +17,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "db:migrate": "npm run db:migrate -w @phantom/server",
-    "start": "npm run start -w @phantom/server"
+    "start": "npm run build && npm run start -w @phantom/server"
   },
   "devDependencies": {
     "@eslint/js": "^9.35.0",

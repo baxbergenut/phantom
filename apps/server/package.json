@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@fastify/cors": "^11.1.0",
+    "@fastify/static": "^10.1.3",
     "@phantom/shared": "0.1.0",
     "better-sqlite3": "^13.0.3",
     "dotenv": "^17.2.2",

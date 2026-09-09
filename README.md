@@ -10,17 +10,20 @@ run Codex or change registered repositories.
 - npm 11 or newer
 - Git available on `PATH`
 
-## Development
+## Run Phantom
 
 ```powershell
 npm install
-npm run db:migrate
-npm run dev
+npm start
 ```
 
-One command, `npm run dev`, starts the Fastify API at
-`http://127.0.0.1:4310` and the Vite dashboard at
-`http://127.0.0.1:4311`. Vite proxies `/api` calls to Fastify.
+Open `http://127.0.0.1:4310`. `npm start` builds the application, applies pending
+database migrations during startup, and serves the dashboard and API from one local
+process.
+
+For development with live reload, run `npm run dev`. This starts the Fastify API at
+`http://127.0.0.1:4310` and the Vite dashboard at `http://127.0.0.1:4311`; Vite
+proxies `/api` calls to Fastify.
 
 The default SQLite database is `data/phantom.db`. The `data` directory and common
 SQLite sidecar files are ignored by Git. To keep data elsewhere, copy `.env.example`
@@ -30,20 +33,19 @@ to `.env` or set `PHANTOM_DATABASE_PATH` in the shell before starting Phantom.
 
 | Command                | Purpose                                          |
 | ---------------------- | ------------------------------------------------ |
-| `npm run dev`          | Start API and dashboard development servers      |
+| `npm start`            | Build and run the complete local application     |
+| `npm run dev`          | Start API and dashboard live-reload servers      |
 | `npm run db:migrate`   | Create or migrate the configured SQLite database |
 | `npm run build`        | Build shared types, server, and dashboard        |
-| `npm run start`        | Start the built API server                       |
 | `npm test`             | Run unit and API integration tests               |
 | `npm run typecheck`    | Type-check all workspaces                        |
 | `npm run lint`         | Run ESLint                                       |
 | `npm run format:check` | Verify Prettier formatting                       |
 | `npm run format`       | Apply Prettier formatting                        |
 
-For a production-style run, use `npm run build` followed by `npm start`. Serving the
-built dashboard from Fastify and Windows service packaging are intentionally deferred
-to Phase 8. You can preview the dashboard build with
-`npm run preview -w @phantom/dashboard`.
+The checked-in `.env.example` documents available settings. This checkout also has an
+ignored local `.env` configured for `127.0.0.1:4310` and `data/phantom.db`. Windows
+service packaging remains intentionally deferred to Phase 8.
 
 ## Phase 1 behavior
 
