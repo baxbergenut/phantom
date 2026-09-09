@@ -104,6 +104,41 @@ boundaries or locked decisions must be recorded in this file.
 - [ ] Phase 7 — Telegram reporting
 - [ ] Phase 8 — Windows service packaging, hardening, and release readiness
 
+## Recommended Codex model for implementing each phase
+
+These recommendations are for the separate Codex tasks used to **build Phantom**.
+They are not the runtime model-tier policy that Phantom will eventually apply to
+queued user tasks.
+
+Model availability and quota behavior can change. At the start of each phase, check
+the models currently offered by the signed-in Codex client. Use the primary choice
+when available; use the fallback when quota is scarce or the primary is unavailable.
+
+| Phase | Primary model | Effort | Quota-saving fallback | Why |
+| --- | --- | --- | --- | --- |
+| 1 — Foundation and dashboard | `gpt-5.6-sol` | `high` | `gpt-5.6-terra` / `high` | Broad full-stack foundation, schema, and API contracts deserve careful architectural consistency. |
+| 2 — Scheduler and recovery | `gpt-5.6-sol` | `xhigh` | `gpt-5.6-sol` / `high` | Leasing, concurrency exclusion, state transitions, and crash recovery contain subtle correctness problems. |
+| 3 — Codex execution | `gpt-5.6-sol` | `xhigh` | `gpt-5.6-sol` / `high` | Process control, streamed protocol parsing, cancellation, persistence, and same-thread retry must agree precisely. |
+| 4 — Git and direct push | `gpt-6-astra` | `high` | `gpt-5.6-sol` / `xhigh` | This phase can modify and push real repositories; strong judgment and edge-case checking are worth the extra quota. |
+| 5 — Quota integration | `gpt-6-astra` | `high` | `gpt-5.6-sol` / `xhigh` | App Server protocol handling, multiple quota buckets, reset scheduling, and restart recovery form a high-stakes state machine. |
+| 6 — Classifier and model policy | `gpt-5.6-sol` | `high` | `gpt-5.6-terra` / `high` | Requires sound policy design and statistics, but the scope is narrower and well specified. |
+| 7 — Telegram reporting | `gpt-5.6-terra` | `medium` | `gpt-5.6-luna` / `high` | A bounded integration with clear acceptance criteria; Terra should handle it efficiently while still covering auth and deduplication. |
+| 8 — Windows packaging and hardening | `gpt-6-astra` | `xhigh` | `gpt-5.6-sol` / `xhigh` | Cross-system hardening, security review, restart testing, and final end-to-end validation require the strongest sustained judgment. |
+
+General rules for phase tasks:
+
+- Prefer the listed effort rather than automatically selecting the maximum.
+- Do not use `ultra` for these phases. Each phase is intentionally sequential and
+  should remain one coherent implementation task; automatic delegation adds quota
+  use without a clear benefit here.
+- Reserve `max` for a focused retry after a phase has failed because of a genuinely
+  difficult design or debugging problem. It is not the default for any phase.
+- If the five-hour or weekly limit is tight, wait for reset or use the listed
+  fallback. Do not reduce effort below `medium` merely to force through a critical
+  phase.
+- Regardless of model, the phase acceptance criteria and verification steps decide
+  completion.
+
 ---
 
 ## Phase 1 — Foundation, database, projects, and task board
