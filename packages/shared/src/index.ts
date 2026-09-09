@@ -71,12 +71,16 @@ export const taskListQuerySchema = z.object({
 });
 export const workerSettingPatchSchema = z.object({ paused: z.boolean() });
 
+export const EXECUTION_STATES = ['running', 'recovering', 'completed', 'failed'] as const;
+export const executionStateSchema = z.enum(EXECUTION_STATES);
+
 export type TaskStatus = z.infer<typeof taskStatusSchema>;
 export type TaskPriority = z.infer<typeof taskPrioritySchema>;
 export type ProjectInput = z.infer<typeof projectInputSchema>;
 export type ProjectPatch = z.infer<typeof projectPatchSchema>;
 export type TaskInput = z.infer<typeof taskInputSchema>;
 export type TaskPatch = z.infer<typeof taskPatchSchema>;
+export type ExecutionState = z.infer<typeof executionStateSchema>;
 
 export interface Project {
   id: string;
@@ -109,6 +113,54 @@ export interface WorkerSetting {
   updatedAt: string;
 }
 
+export interface TaskEvent {
+  id: string;
+  taskId: string;
+  executionId: string | null;
+  previousStatus: TaskStatus | null;
+  newStatus: TaskStatus;
+  reason: string;
+  correlationId: string;
+  createdAt: string;
+}
+
+export interface Execution {
+  id: string;
+  taskId: string;
+  attemptNumber: number;
+  state: ExecutionState;
+  workerId: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+  heartbeatAt: string;
+  recoveryCount: number;
+  recoveryMetadata: Record<string, unknown> | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkerTaskSummary {
+  id: string;
+  title: string;
+  projectName: string;
+  priority: TaskPriority;
+}
+
+export interface WorkerHealth {
+  status: 'idle' | 'running' | 'paused' | 'stale' | 'stopping';
+  workerId: string;
+  leaseOwner: string | null;
+  leaseExpiresAt: string | null;
+  lastPollAt: string | null;
+  heartbeatAt: string | null;
+  currentTask: WorkerTaskSummary | null;
+  nextEligibleTask: WorkerTaskSummary | null;
+  paused: boolean;
+  pollIntervalMs: number;
+  staleAfterMs: number;
+}
+
 export interface HealthResponse {
   status: 'ok';
   database: 'connected';
@@ -118,7 +170,7 @@ export interface HealthResponse {
 export interface VersionResponse {
   name: 'phantom';
   version: string;
-  phase: 1;
+  phase: 2;
 }
 
 export interface ApiError {

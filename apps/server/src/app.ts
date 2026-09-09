@@ -14,19 +14,30 @@ import {
   taskPriorityPatchSchema,
   workerSettingPatchSchema,
 } from '@phantom/shared';
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import Fastify from 'fastify';
 
 import { openDatabase } from './db/index.js';
-import { projects, settings, tasks } from './db/schema.js';
+import { executions, projects, settings, taskEvents, tasks } from './db/schema.js';
+import type { TaskExecutor } from './fake-executor.js';
 import { HttpError, parseBody } from './http.js';
 import { ProjectPathError, validateProjectPath } from './project-validation.js';
+import {
+  markInitialTaskEvent,
+  Scheduler,
+  schedulerConfigFromEnvironment,
+  type SchedulerConfig,
+} from './scheduler.js';
+import { InvalidTaskTransitionError, transitionTask } from './task-state.js';
 
 interface AppOptions {
   databasePath?: string;
   dashboardRoot?: string | false;
   migrationsFolder?: string;
   logger?: boolean;
+  schedulerEnabled?: boolean;
+  schedulerConfig?: Partial<SchedulerConfig>;
+  executor?: TaskExecutor;
 }
 
 const workerPausedKey = 'worker.paused';
@@ -35,6 +46,11 @@ const defaultDashboardRoot = fileURLToPath(new URL('../../dashboard/dist', impor
 export async function createApp(options: AppOptions = {}) {
   const database = openDatabase(options.databasePath, options.migrationsFolder);
   const app = Fastify({ logger: options.logger ?? false });
+  const scheduler = new Scheduler(database, {
+    ...(options.executor ? { executor: options.executor } : {}),
+    config: { ...schedulerConfigFromEnvironment(), ...options.schedulerConfig },
+    logger: app.log,
+  });
 
   await app.register(cors, {
     origin: (origin, callback) => {
@@ -56,6 +72,9 @@ export async function createApp(options: AppOptions = {}) {
     if (error instanceof ProjectPathError) {
       return reply.status(400).send({ error: error.message });
     }
+    if (error instanceof InvalidTaskTransitionError) {
+      return reply.status(409).send({ error: error.message });
+    }
     if (error instanceof Error && error.message.includes('UNIQUE constraint failed')) {
       return reply.status(409).send({ error: 'A project with this local path already exists.' });
     }
@@ -63,7 +82,8 @@ export async function createApp(options: AppOptions = {}) {
     return reply.status(500).send({ error: 'An unexpected server error occurred.' });
   });
 
-  app.addHook('onClose', () => {
+  app.addHook('onClose', async () => {
+    await scheduler.stop();
     database.sqlite.close();
   });
 
@@ -72,7 +92,7 @@ export async function createApp(options: AppOptions = {}) {
     return { status: 'ok', database: 'connected', timestamp: new Date().toISOString() };
   });
 
-  app.get('/api/version', () => ({ name: 'phantom', version: '0.1.0', phase: 1 }));
+  app.get('/api/version', () => ({ name: 'phantom', version: '0.1.0', phase: 2 }));
 
   app.get('/api/projects', () =>
     database.db.select().from(projects).orderBy(asc(projects.name)).all(),
@@ -119,6 +139,17 @@ export async function createApp(options: AppOptions = {}) {
 
   app.delete('/api/projects/:id', (request, reply) => {
     const { id } = request.params as { id: string };
+    const active = database.db
+      .select({ id: tasks.id })
+      .from(tasks)
+      .where(
+        and(
+          eq(tasks.projectId, id),
+          inArray(tasks.status, ['classifying', 'waiting_quota', 'running', 'retrying']),
+        ),
+      )
+      .get();
+    if (active) throw new HttpError(409, 'A project with active work cannot be deleted.');
     const result = database.db.delete(projects).where(eq(projects.id, id)).run();
     if (result.changes === 0) throw new HttpError(404, 'Project not found.');
     return reply.status(204).send();
@@ -190,7 +221,12 @@ export async function createApp(options: AppOptions = {}) {
       createdAt: now,
       updatedAt: now,
     };
-    database.db.insert(tasks).values(task).run();
+    database.sqlite
+      .transaction(() => {
+        database.db.insert(tasks).values(task).run();
+        markInitialTaskEvent(database.sqlite, task.id, now);
+      })
+      .immediate();
     return reply
       .status(201)
       .send(
@@ -244,12 +280,36 @@ export async function createApp(options: AppOptions = {}) {
     if (task.status !== 'failed' && task.status !== 'blocked') {
       throw new HttpError(409, 'Only failed or blocked tasks can be requeued.');
     }
-    database.db
-      .update(tasks)
-      .set({ status: 'queued', statusReason: null, updatedAt: new Date().toISOString() })
-      .where(eq(tasks.id, id))
-      .run();
+    transitionTask(database.sqlite, {
+      taskId: id,
+      newStatus: 'queued',
+      reason: 'Manually requeued.',
+      statusReason: null,
+      expectedStatus: task.status,
+    });
     return getTask(database, id);
+  });
+
+  app.get('/api/tasks/:id/history', (request) => {
+    const { id } = request.params as { id: string };
+    requireTask(database, id);
+    return database.db
+      .select()
+      .from(taskEvents)
+      .where(eq(taskEvents.taskId, id))
+      .orderBy(asc(taskEvents.createdAt), asc(taskEvents.id))
+      .all();
+  });
+
+  app.get('/api/tasks/:id/executions', (request) => {
+    const { id } = request.params as { id: string };
+    requireTask(database, id);
+    return database.db
+      .select()
+      .from(executions)
+      .where(eq(executions.taskId, id))
+      .orderBy(desc(executions.attemptNumber))
+      .all();
   });
 
   app.get('/api/settings/worker', () => getWorkerSetting(database));
@@ -268,6 +328,8 @@ export async function createApp(options: AppOptions = {}) {
     return { paused, updatedAt };
   });
 
+  app.get('/api/worker/health', () => scheduler.getHealth());
+
   const dashboardRoot = options.dashboardRoot ?? defaultDashboardRoot;
   if (dashboardRoot && existsSync(dashboardRoot)) {
     await app.register(fastifyStatic, {
@@ -275,6 +337,8 @@ export async function createApp(options: AppOptions = {}) {
       prefix: '/',
     });
   }
+
+  if (options.schedulerEnabled !== false) scheduler.start();
 
   return app;
 }
@@ -309,6 +373,12 @@ function getTask(database: DatabaseHandle, id: string) {
     .innerJoin(projects, eq(tasks.projectId, projects.id))
     .where(eq(tasks.id, id))
     .get();
+  if (!task) throw new HttpError(404, 'Task not found.');
+  return task;
+}
+
+function requireTask(database: DatabaseHandle, id: string) {
+  const task = database.db.select({ id: tasks.id }).from(tasks).where(eq(tasks.id, id)).get();
   if (!task) throw new HttpError(404, 'Task not found.');
   return task;
 }

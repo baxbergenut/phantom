@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
 
-describe('Phase 1 API', () => {
+describe('Phase 2 API', () => {
   let root: string;
   let databasePath: string;
   let repositoryPath: string;
@@ -20,7 +20,7 @@ describe('Phase 1 API', () => {
     repositoryPath = path.join(root, 'project');
     mkdirSync(repositoryPath);
     execFileSync('git', ['init', '-b', 'main'], { cwd: repositoryPath, stdio: 'ignore' });
-    app = await createApp({ databasePath, dashboardRoot: false });
+    app = await createApp({ databasePath, dashboardRoot: false, schedulerEnabled: false });
   });
 
   afterEach(async () => {
@@ -60,7 +60,7 @@ describe('Phase 1 API', () => {
     expect(health.json()).toMatchObject({ status: 'ok', database: 'connected' });
 
     const version = await app.inject({ method: 'GET', url: '/api/version' });
-    expect(version.json()).toEqual({ name: 'phantom', version: '0.1.0', phase: 1 });
+    expect(version.json()).toEqual({ name: 'phantom', version: '0.1.0', phase: 2 });
   });
 
   it('serves the built dashboard from the production server', async () => {
@@ -68,7 +68,7 @@ describe('Phase 1 API', () => {
     const dashboardRoot = path.join(root, 'dashboard');
     mkdirSync(dashboardRoot);
     writeFileSync(path.join(dashboardRoot, 'index.html'), '<h1>Phantom dashboard</h1>');
-    app = await createApp({ databasePath, dashboardRoot });
+    app = await createApp({ databasePath, dashboardRoot, schedulerEnabled: false });
 
     const response = await app.inject({ method: 'GET', url: '/' });
     expect(response.statusCode).toBe(200);
@@ -188,7 +188,7 @@ describe('Phase 1 API', () => {
     await app.inject({ method: 'PATCH', url: '/api/settings/worker', payload: { paused: true } });
     await app.close();
 
-    app = await createApp({ databasePath, dashboardRoot: false });
+    app = await createApp({ databasePath, dashboardRoot: false, schedulerEnabled: false });
     expect(
       (await app.inject({ method: 'GET', url: '/api/projects' })).json<unknown[]>(),
     ).toHaveLength(1);
@@ -209,4 +209,64 @@ describe('Phase 1 API', () => {
     expect(response.statusCode).toBe(400);
     expect(response.json<{ details: unknown[] }>().details.length).toBeGreaterThanOrEqual(3);
   });
+
+  it('exposes worker health and durable task history', async () => {
+    const project = await createProject();
+    const response = await createTask(project.id, 'Audited task');
+    const taskId = response.json<{ id: string }>().id;
+
+    const health = await app.inject({ method: 'GET', url: '/api/worker/health' });
+    expect(health.statusCode).toBe(200);
+    expect(health.json()).toMatchObject({ status: 'idle', paused: false });
+
+    const history = await app.inject({ method: 'GET', url: `/api/tasks/${taskId}/history` });
+    expect(history.json()).toEqual([
+      expect.objectContaining({
+        previousStatus: null,
+        newStatus: 'queued',
+        reason: 'Task created.',
+      }),
+    ]);
+    const runs = await app.inject({ method: 'GET', url: `/api/tasks/${taskId}/executions` });
+    expect(runs.json()).toEqual([]);
+  });
+
+  it('starts queued work after a backend restart and persists its result', async () => {
+    const project = await createProject();
+    const response = await createTask(project.id, 'Restart-ready task');
+    const taskId = response.json<{ id: string }>().id;
+    await app.close();
+
+    app = await createApp({
+      databasePath,
+      dashboardRoot: false,
+      schedulerConfig: { pollIntervalMs: 10, heartbeatIntervalMs: 5, staleAfterMs: 50 },
+    });
+    await expectTaskStatus(app, taskId, 'completed');
+    await app.close();
+
+    app = await createApp({ databasePath, dashboardRoot: false, schedulerEnabled: false });
+    expect((await app.inject({ method: 'GET', url: `/api/tasks/${taskId}` })).json()).toMatchObject(
+      { status: 'completed', attemptCount: 1 },
+    );
+    const history = (await app.inject({ method: 'GET', url: `/api/tasks/${taskId}/history` })).json<
+      Array<{ newStatus: string }>
+    >();
+    expect(history.map((event) => event.newStatus)).toEqual(['queued', 'running', 'completed']);
+  });
 });
+
+async function expectTaskStatus(
+  app: Awaited<ReturnType<typeof createApp>>,
+  taskId: string,
+  expected: string,
+) {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const task = (await app.inject({ method: 'GET', url: `/api/tasks/${taskId}` })).json<{
+      status: string;
+    }>();
+    if (task.status === expected) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Task ${taskId} did not reach ${expected}.`);
+}

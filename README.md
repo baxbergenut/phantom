@@ -1,8 +1,8 @@
 # Phantom
 
 Phantom is a local, single-user dashboard for managing Codex tasks across local Git
-repositories. Phase 1 provides durable project and task management only; it does not
-run Codex or change registered repositories.
+repositories. Phase 2 adds a durable single-task scheduler and a fake executor for
+testing orchestration safely; it does not run Codex or change registered repositories.
 
 ## Requirements
 
@@ -47,15 +47,29 @@ The checked-in `.env.example` documents available settings. This checkout also h
 ignored local `.env` configured for `127.0.0.1:4310` and `data/phantom.db`. Windows
 service packaging remains intentionally deferred to Phase 8.
 
-## Phase 1 behavior
+## Phase 2 behavior
 
 - Project paths are resolved and validated with read-only Git commands.
-- Tasks are always created in `queued`; Phase 1 has no route that starts a task.
+- Tasks are created in `queued` and the scheduler runs one task at a time.
 - Queued tasks can be edited, reprioritized, or deleted.
 - Failed or blocked tasks can be manually requeued.
 - Queue order is urgent, high, normal, then low, with creation time breaking ties.
-- The worker pause setting is durable, though there is no worker yet.
+- The worker pause setting is durable and prevents new acquisitions without
+  interrupting active work.
+- Scheduler acquisition and task transition use one immediate SQLite transaction and
+  a database-backed global lease.
+- Every task transition and execution attempt is persisted. Stale or gracefully
+  interrupted fake executions resume with the same execution ID and attempt number.
+- Worker health, current work, next eligible work, and task history are available in
+  both the API and dashboard.
+- Fake tasks succeed after a short delay by default. Put `[fake:failure]`,
+  `[fake:crash]`, or `[fake:delay=1000]` in task instructions to exercise deterministic
+  failure, one-time crash recovery, or delay behavior.
 - The backend and dashboard bind to loopback by default.
+
+The scheduler polls every 60 seconds. The optional environment settings
+`PHANTOM_SCHEDULER_INTERVAL_MS`, `PHANTOM_HEARTBEAT_INTERVAL_MS`,
+`PHANTOM_STALE_EXECUTION_MS`, and `PHANTOM_LEASE_DURATION_MS` override its timing.
 
 The full roadmap and locked safety decisions are in
 [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).

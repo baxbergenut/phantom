@@ -2,12 +2,15 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import {
   TASK_PRIORITIES,
+  type Execution,
   type Project,
   type ProjectInput,
   type Task,
+  type TaskEvent,
   type TaskInput,
   type TaskPriority,
   type TaskStatus,
+  type WorkerHealth,
 } from '@phantom/shared';
 
 import { api, ApiRequestError } from './api';
@@ -36,6 +39,9 @@ export function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [paused, setPaused] = useState(false);
+  const [worker, setWorker] = useState<WorkerHealth | null>(null);
+  const [taskHistory, setTaskHistory] = useState<TaskEvent[]>([]);
+  const [taskExecutions, setTaskExecutions] = useState<Execution[]>([]);
   const [loading, setLoading] = useState(true);
   const [offline, setOffline] = useState(false);
   const [error, setError] = useState('');
@@ -45,30 +51,48 @@ export function App() {
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
+  const refresh = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setError('');
     try {
-      const [projectRows, taskRows, worker] = await Promise.all([
+      const [projectRows, taskRows, workerSetting, workerHealth] = await Promise.all([
         api.projects(),
         api.tasks(),
         api.workerSetting(),
+        api.workerHealth(),
       ]);
       setProjects(projectRows);
       setTasks(taskRows);
-      setPaused(worker.paused);
+      setPaused(workerSetting.paused);
+      setWorker(workerHealth);
       setOffline(false);
     } catch (nextError) {
       setOffline(nextError instanceof ApiRequestError && nextError.offline);
       setError(errorMessage(nextError));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     void refresh();
+    const timer = window.setInterval(() => void refresh(true), 5_000);
+    return () => window.clearInterval(timer);
   }, [refresh]);
+
+  useEffect(() => {
+    if (!selectedTask) {
+      setTaskHistory([]);
+      setTaskExecutions([]);
+      return;
+    }
+    void Promise.all([api.taskHistory(selectedTask.id), api.taskExecutions(selectedTask.id)])
+      .then(([history, executions]) => {
+        setTaskHistory(history);
+        setTaskExecutions(executions);
+      })
+      .catch((nextError) => setError(errorMessage(nextError)));
+  }, [selectedTask, tasks]);
 
   async function perform(action: () => Promise<unknown>) {
     setError('');
@@ -107,7 +131,7 @@ export function App() {
           className={`pause-control ${paused ? 'paused' : ''}`}
           onClick={() => void perform(() => api.setWorkerPaused(!paused))}
         >
-          <span className="status-dot" /> Worker {paused ? 'paused' : 'ready'}
+          <span className="status-dot" /> Worker {paused ? 'paused' : (worker?.status ?? 'ready')}
         </button>
       </header>
 
@@ -145,6 +169,7 @@ export function App() {
           <BoardView
             tasks={tasks}
             projects={projects}
+            worker={worker}
             onAdd={() => setShowTaskForm(true)}
             onSelect={setSelectedTask}
             onPriority={(task, priority) =>
@@ -181,6 +206,8 @@ export function App() {
       {selectedTask && (
         <TaskDetails
           task={tasks.find((task) => task.id === selectedTask.id) ?? selectedTask}
+          history={taskHistory}
+          executions={taskExecutions}
           onClose={() => setSelectedTask(null)}
           onDelete={async () => {
             const succeeded = await perform(() => api.deleteTask(selectedTask.id));
@@ -282,12 +309,14 @@ function ProjectsView({
 function BoardView({
   tasks,
   projects,
+  worker,
   onAdd,
   onSelect,
   onPriority,
 }: {
   tasks: Task[];
   projects: Project[];
+  worker: WorkerHealth | null;
   onAdd: () => void;
   onSelect: (task: Task) => void;
   onPriority: (task: Task, priority: TaskPriority) => void;
@@ -298,12 +327,13 @@ function BoardView({
         <div>
           <p className="eyebrow">Local queue</p>
           <h1>Task board</h1>
-          <p>Priority first, then oldest task. Execution begins in Phase 2.</p>
+          <p>Priority first, then oldest task. The durable fake worker runs one task at a time.</p>
         </div>
         <button className="primary" disabled={projects.length === 0} onClick={onAdd}>
           + New task
         </button>
       </div>
+      {worker && <WorkerSummary worker={worker} />}
       {tasks.length === 0 ? (
         <EmptyState
           title="Your queue is clear"
@@ -364,6 +394,29 @@ function BoardView({
         </div>
       )}
     </section>
+  );
+}
+
+function WorkerSummary({ worker }: { worker: WorkerHealth }) {
+  const lastPoll = worker.lastPollAt ? new Date(worker.lastPollAt).toLocaleTimeString() : 'Not yet';
+  return (
+    <div className="worker-summary">
+      <div>
+        <span className={`worker-state ${worker.status}`}>{worker.status}</span>
+        <strong>Scheduler</strong>
+        <small>
+          Polls every {Math.round(worker.pollIntervalMs / 1000)}s · Last poll {lastPoll}
+        </small>
+      </div>
+      <div>
+        <small>Current task</small>
+        <strong>{worker.currentTask?.title ?? 'None'}</strong>
+      </div>
+      <div>
+        <small>Next eligible</small>
+        <strong>{worker.nextEligibleTask?.title ?? 'Queue clear'}</strong>
+      </div>
+    </div>
   );
 }
 
@@ -612,12 +665,16 @@ function TaskForm({
 
 function TaskDetails({
   task,
+  history,
+  executions,
   onClose,
   onDelete,
   onRequeue,
   onSave,
 }: {
   task: Task;
+  history: TaskEvent[];
+  executions: Execution[];
   onClose: () => void;
   onDelete: () => Promise<void>;
   onRequeue: () => void;
@@ -702,6 +759,35 @@ function TaskDetails({
               {task.statusReason}
             </div>
           )}
+          <section className="history">
+            <h4>Run history</h4>
+            {executions.length > 0 && (
+              <div className="execution-list">
+                {executions.map((execution) => (
+                  <span key={execution.id}>
+                    Attempt {execution.attemptNumber}: {execution.state}
+                    {execution.recoveryCount ? ` · recovered ${execution.recoveryCount}×` : ''}
+                  </span>
+                ))}
+              </div>
+            )}
+            {history.length === 0 ? (
+              <p>No history recorded.</p>
+            ) : (
+              <ol>
+                {history.map((event) => (
+                  <li key={event.id}>
+                    <span>{new Date(event.createdAt).toLocaleString()}</span>
+                    <strong>
+                      {event.previousStatus ? `${event.previousStatus} → ` : ''}
+                      {event.newStatus}
+                    </strong>
+                    <small>{event.reason}</small>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </section>
           <div className="form-actions">
             {task.status === 'queued' && (
               <>

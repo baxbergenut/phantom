@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { check, index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
-import type { TaskPriority, TaskStatus } from '@phantom/shared';
+import type { ExecutionState, TaskPriority, TaskStatus } from '@phantom/shared';
 
 export const projects = sqliteTable(
   'projects',
@@ -53,5 +53,64 @@ export const tasks = sqliteTable(
 export const settings = sqliteTable('settings', {
   key: text('key').primaryKey(),
   value: text('value').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export const executions = sqliteTable(
+  'executions',
+  {
+    id: text('id').primaryKey(),
+    taskId: text('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    attemptNumber: integer('attempt_number').notNull(),
+    state: text('state').$type<ExecutionState>().notNull(),
+    workerId: text('worker_id'),
+    startedAt: text('started_at').notNull(),
+    finishedAt: text('finished_at'),
+    heartbeatAt: text('heartbeat_at').notNull(),
+    recoveryCount: integer('recovery_count').notNull().default(0),
+    recoveryMetadata: text('recovery_metadata', { mode: 'json' }).$type<Record<string, unknown>>(),
+    error: text('error'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('executions_task_attempt_unique').on(table.taskId, table.attemptNumber),
+    index('executions_state_heartbeat_idx').on(table.state, table.heartbeatAt),
+    check(
+      'executions_state_check',
+      sql`${table.state} IN ('running', 'recovering', 'completed', 'failed')`,
+    ),
+    check('executions_attempt_number_check', sql`${table.attemptNumber} > 0`),
+    check('executions_recovery_count_check', sql`${table.recoveryCount} >= 0`),
+  ],
+);
+
+export const taskEvents = sqliteTable(
+  'task_events',
+  {
+    id: text('id').primaryKey(),
+    taskId: text('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    executionId: text('execution_id').references(() => executions.id, { onDelete: 'set null' }),
+    previousStatus: text('previous_status').$type<TaskStatus>(),
+    newStatus: text('new_status').$type<TaskStatus>().notNull(),
+    reason: text('reason').notNull(),
+    correlationId: text('correlation_id').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (table) => [index('task_events_task_created_idx').on(table.taskId, table.createdAt)],
+);
+
+export const workerLease = sqliteTable('worker_lease', {
+  key: text('key').primaryKey(),
+  workerId: text('worker_id'),
+  executionId: text('execution_id').references(() => executions.id, { onDelete: 'set null' }),
+  leaseExpiresAt: text('lease_expires_at'),
+  heartbeatAt: text('heartbeat_at'),
+  lastPollAt: text('last_poll_at'),
+  shuttingDown: integer('shutting_down', { mode: 'boolean' }).notNull().default(false),
   updatedAt: text('updated_at').notNull(),
 });

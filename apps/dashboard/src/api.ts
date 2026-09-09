@@ -1,13 +1,16 @@
 import type {
   ApiError,
+  Execution,
   Project,
   ProjectInput,
   ProjectPatch,
   Task,
+  TaskEvent,
   TaskInput,
   TaskPatch,
   TaskPriority,
   WorkerSetting,
+  WorkerHealth,
 } from '@phantom/shared';
 
 const baseUrl = import.meta.env.VITE_API_URL ?? '';
@@ -65,6 +68,9 @@ export const api = {
     }),
   deleteTask: (id: string) => request<void>(`/api/tasks/${id}`, { method: 'DELETE' }),
   requeueTask: (id: string) => request<Task>(`/api/tasks/${id}/requeue`, { method: 'POST' }),
+  taskHistory: (id: string) => request<TaskEvent[]>(`/api/tasks/${id}/history`),
+  taskExecutions: (id: string) => request<Execution[]>(`/api/tasks/${id}/executions`),
+  workerHealth: () => request<WorkerHealth>('/api/worker/health'),
   workerSetting: () => request<WorkerSetting>('/api/settings/worker'),
   setWorkerPaused: (paused: boolean) =>
     request<WorkerSetting>('/api/settings/worker', {
