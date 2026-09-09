@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   TASK_PRIORITIES,
   type Execution,
+  type ExecutionEvent,
   type Project,
   type ProjectInput,
   type Task,
@@ -42,6 +43,7 @@ export function App() {
   const [worker, setWorker] = useState<WorkerHealth | null>(null);
   const [taskHistory, setTaskHistory] = useState<TaskEvent[]>([]);
   const [taskExecutions, setTaskExecutions] = useState<Execution[]>([]);
+  const [executionEvents, setExecutionEvents] = useState<ExecutionEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [offline, setOffline] = useState(false);
   const [error, setError] = useState('');
@@ -84,12 +86,14 @@ export function App() {
     if (!selectedTask) {
       setTaskHistory([]);
       setTaskExecutions([]);
+      setExecutionEvents([]);
       return;
     }
     void Promise.all([api.taskHistory(selectedTask.id), api.taskExecutions(selectedTask.id)])
-      .then(([history, executions]) => {
+      .then(async ([history, executions]) => {
         setTaskHistory(history);
         setTaskExecutions(executions);
+        setExecutionEvents(executions[0] ? await api.executionEvents(executions[0].id) : []);
       })
       .catch((nextError) => setError(errorMessage(nextError)));
   }, [selectedTask, tasks]);
@@ -170,6 +174,7 @@ export function App() {
             tasks={tasks}
             projects={projects}
             worker={worker}
+            onCancel={() => void perform(() => api.cancelWorker())}
             onAdd={() => setShowTaskForm(true)}
             onSelect={setSelectedTask}
             onPriority={(task, priority) =>
@@ -208,6 +213,7 @@ export function App() {
           task={tasks.find((task) => task.id === selectedTask.id) ?? selectedTask}
           history={taskHistory}
           executions={taskExecutions}
+          executionEvents={executionEvents}
           onClose={() => setSelectedTask(null)}
           onDelete={async () => {
             const succeeded = await perform(() => api.deleteTask(selectedTask.id));
@@ -310,6 +316,7 @@ function BoardView({
   tasks,
   projects,
   worker,
+  onCancel,
   onAdd,
   onSelect,
   onPriority,
@@ -317,6 +324,7 @@ function BoardView({
   tasks: Task[];
   projects: Project[];
   worker: WorkerHealth | null;
+  onCancel: () => void;
   onAdd: () => void;
   onSelect: (task: Task) => void;
   onPriority: (task: Task, priority: TaskPriority) => void;
@@ -333,7 +341,7 @@ function BoardView({
           + New task
         </button>
       </div>
-      {worker && <WorkerSummary worker={worker} />}
+      {worker && <WorkerSummary worker={worker} onCancel={onCancel} />}
       {tasks.length === 0 ? (
         <EmptyState
           title="Your queue is clear"
@@ -397,7 +405,7 @@ function BoardView({
   );
 }
 
-function WorkerSummary({ worker }: { worker: WorkerHealth }) {
+function WorkerSummary({ worker, onCancel }: { worker: WorkerHealth; onCancel: () => void }) {
   const lastPoll = worker.lastPollAt ? new Date(worker.lastPollAt).toLocaleTimeString() : 'Not yet';
   return (
     <div className="worker-summary">
@@ -416,6 +424,7 @@ function WorkerSummary({ worker }: { worker: WorkerHealth }) {
         <small>Next eligible</small>
         <strong>{worker.nextEligibleTask?.title ?? 'Queue clear'}</strong>
       </div>
+      {worker.status === 'running' && <button onClick={onCancel}>Cancel active task</button>}
     </div>
   );
 }
@@ -667,6 +676,7 @@ function TaskDetails({
   task,
   history,
   executions,
+  executionEvents,
   onClose,
   onDelete,
   onRequeue,
@@ -675,6 +685,7 @@ function TaskDetails({
   task: Task;
   history: TaskEvent[];
   executions: Execution[];
+  executionEvents: ExecutionEvent[];
   onClose: () => void;
   onDelete: () => Promise<void>;
   onRequeue: () => void;
@@ -764,11 +775,40 @@ function TaskDetails({
             {executions.length > 0 && (
               <div className="execution-list">
                 {executions.map((execution) => (
-                  <span key={execution.id}>
-                    Attempt {execution.attemptNumber}: {execution.state}
-                    {execution.recoveryCount ? ` · recovered ${execution.recoveryCount}×` : ''}
-                  </span>
+                  <div key={execution.id}>
+                    <span>
+                      Attempt {execution.attemptNumber}: {execution.state}
+                      {execution.retryCount ? ` · retried ${execution.retryCount}×` : ''}
+                      {execution.recoveryCount ? ` · recovered ${execution.recoveryCount}×` : ''}
+                    </span>
+                    {execution.codexThreadId && <code>Thread {execution.codexThreadId}</code>}
+                    {execution.tokenUsage && (
+                      <small>
+                        {execution.tokenUsage.inputTokens.toLocaleString()} input ·{' '}
+                        {execution.tokenUsage.outputTokens.toLocaleString()} output tokens
+                      </small>
+                    )}
+                    {execution.finalResult && (
+                      <div className="reason">
+                        <strong>Final result: {execution.finalResult.status}</strong>
+                        {execution.finalResult.summary}
+                      </div>
+                    )}
+                  </div>
                 ))}
+              </div>
+            )}
+            {executionEvents.length > 0 && (
+              <div className="execution-events">
+                <h4>Live Codex activity</h4>
+                <ol>
+                  {executionEvents.slice(-25).map((event) => (
+                    <li key={event.id}>
+                      <strong>{event.kind.replace('_', ' ')}</strong>
+                      <small>{event.message}</small>
+                    </li>
+                  ))}
+                </ol>
               </div>
             )}
             {history.length === 0 ? (

@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { priorityRank, projectInputSchema, TASK_STATUSES, taskInputSchema } from './index.js';
+import {
+  codexFinalResultSchema,
+  priorityRank,
+  projectInputSchema,
+  TASK_STATUSES,
+  taskInputSchema,
+} from './index.js';
 
 describe('shared API contracts', () => {
   it('defines every lifecycle status centrally', () => {
@@ -29,5 +35,28 @@ describe('shared API contracts', () => {
     expect(taskInputSchema.safeParse({}).success).toBe(false);
     const parsed = projectInputSchema.parse({ name: 'Example', localPath: 'C:\\example' });
     expect(parsed).toMatchObject({ remoteName: 'origin', remoteBranch: 'main', enabled: true });
+  });
+
+  it('validates semantic invariants in Codex final results', () => {
+    const complete = {
+      schemaVersion: 1,
+      status: 'completed',
+      summary: 'All requested work is complete.',
+      completedItems: ['Implemented the change'],
+      incompleteItems: [],
+      failureCategory: 'none',
+      failureReason: null,
+      retryRecommended: false,
+      commitSha: null,
+      pushed: false,
+    };
+    expect(codexFinalResultSchema.safeParse(complete).success).toBe(true);
+    expect(
+      codexFinalResultSchema.safeParse({
+        ...complete,
+        status: 'failed',
+        failureCategory: 'task',
+      }).success,
+    ).toBe(false);
   });
 });

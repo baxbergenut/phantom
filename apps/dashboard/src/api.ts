@@ -1,6 +1,7 @@
 import type {
   ApiError,
   Execution,
+  ExecutionEvent,
   Project,
   ProjectInput,
   ProjectPatch,
@@ -70,6 +71,7 @@ export const api = {
   requeueTask: (id: string) => request<Task>(`/api/tasks/${id}/requeue`, { method: 'POST' }),
   taskHistory: (id: string) => request<TaskEvent[]>(`/api/tasks/${id}/history`),
   taskExecutions: (id: string) => request<Execution[]>(`/api/tasks/${id}/executions`),
+  executionEvents: (id: string) => request<ExecutionEvent[]>(`/api/executions/${id}/events`),
   workerHealth: () => request<WorkerHealth>('/api/worker/health'),
   workerSetting: () => request<WorkerSetting>('/api/settings/worker'),
   setWorkerPaused: (paused: boolean) =>
@@ -77,4 +79,5 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ paused }),
     }),
+  cancelWorker: () => request<{ accepted: true }>('/api/worker/cancel', { method: 'POST' }),
 };

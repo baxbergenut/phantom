@@ -74,6 +74,63 @@ export const workerSettingPatchSchema = z.object({ paused: z.boolean() });
 export const EXECUTION_STATES = ['running', 'recovering', 'completed', 'failed'] as const;
 export const executionStateSchema = z.enum(EXECUTION_STATES);
 
+export const CODEX_RESULT_STATUSES = ['completed', 'incomplete', 'failed'] as const;
+export const CODEX_FAILURE_CATEGORIES = [
+  'none',
+  'task',
+  'environment',
+  'authentication',
+  'rate_limit',
+  'timeout',
+  'cancelled',
+  'malformed_output',
+] as const;
+
+export const codexFinalResultSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    status: z.enum(CODEX_RESULT_STATUSES),
+    summary: trimmedText('Result summary', 4_000),
+    completedItems: z.array(z.string().trim().min(1).max(2_000)).max(100),
+    incompleteItems: z.array(z.string().trim().min(1).max(2_000)).max(100),
+    failureCategory: z.enum(CODEX_FAILURE_CATEGORIES),
+    failureReason: z.string().trim().max(8_000).nullable(),
+    retryRecommended: z.boolean(),
+    commitSha: z
+      .string()
+      .trim()
+      .regex(/^[0-9a-f]{7,64}$/i)
+      .nullable(),
+    pushed: z.boolean(),
+  })
+  .superRefine((value, context) => {
+    if (value.status === 'completed' && value.failureCategory !== 'none') {
+      context.addIssue({
+        code: 'custom',
+        path: ['failureCategory'],
+        message: 'Completed results must use the none failure category.',
+      });
+    }
+    if (value.status !== 'completed' && !value.failureReason) {
+      context.addIssue({
+        code: 'custom',
+        path: ['failureReason'],
+        message: 'Non-completed results require a failure reason.',
+      });
+    }
+  });
+
+export const CODEX_EVENT_KINDS = [
+  'thread',
+  'progress',
+  'command',
+  'file_change',
+  'usage',
+  'failure',
+  'final',
+] as const;
+export const codexEventKindSchema = z.enum(CODEX_EVENT_KINDS);
+
 export type TaskStatus = z.infer<typeof taskStatusSchema>;
 export type TaskPriority = z.infer<typeof taskPrioritySchema>;
 export type ProjectInput = z.infer<typeof projectInputSchema>;
@@ -81,6 +138,8 @@ export type ProjectPatch = z.infer<typeof projectPatchSchema>;
 export type TaskInput = z.infer<typeof taskInputSchema>;
 export type TaskPatch = z.infer<typeof taskPatchSchema>;
 export type ExecutionState = z.infer<typeof executionStateSchema>;
+export type CodexFinalResult = z.infer<typeof codexFinalResultSchema>;
+export type CodexEventKind = z.infer<typeof codexEventKindSchema>;
 
 export interface Project {
   id: string;
@@ -136,8 +195,29 @@ export interface Execution {
   recoveryCount: number;
   recoveryMetadata: Record<string, unknown> | null;
   error: string | null;
+  codexThreadId: string | null;
+  retryCount: number;
+  finalResult: CodexFinalResult | null;
+  tokenUsage: TokenUsage | null;
+  rawLogPath: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TokenUsage {
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+}
+
+export interface ExecutionEvent {
+  id: string;
+  executionId: string;
+  sequence: number;
+  kind: CodexEventKind;
+  message: string;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
 }
 
 export interface WorkerTaskSummary {
@@ -170,7 +250,7 @@ export interface HealthResponse {
 export interface VersionResponse {
   name: 'phantom';
   version: string;
-  phase: 2;
+  phase: 3;
 }
 
 export interface ApiError {

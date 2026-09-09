@@ -97,7 +97,7 @@ boundaries or locked decisions must be recorded in this file.
       `https://github.com/baxbergenut/phantom.git` configured as `origin`.
 - [x] Phase 1 — Foundation, database, projects, and task board
 - [x] Phase 2 — Persistent single-task scheduler and restart recovery
-- [ ] Phase 3 — Codex execution, structured results, and same-thread retries
+- [x] Phase 3 — Codex execution, structured results, and same-thread retries
 - [ ] Phase 4 — Git synchronization, commit verification, and direct push
 - [ ] Phase 5 — Live quota integration and reset-aware scheduling
 - [ ] Phase 6 — Local complexity classifier and model selection policy
@@ -257,7 +257,7 @@ Codex quota or modifying repositories.
 
 ## Phase 3 — Codex execution, structured results, and same-thread retries
 
-**Status:** Planned
+**Status:** Complete
 
 **Prerequisite:** Phase 2
 
@@ -268,32 +268,32 @@ machine-readable progress and require a structured final answer.
 
 ### Required work
 
-- [ ] Choose and document whether the first implementation uses the Codex SDK or
+- [x] Choose and document whether the first implementation uses the Codex SDK or
       `codex exec`. Keep the integration behind an adapter interface.
-- [ ] Add a startup capability check for the installed Codex version, authentication,
+- [x] Add a startup capability check for the installed Codex version, authentication,
       executable availability, and required output features.
-- [ ] Launch Codex in the configured project's local directory with explicit model,
+- [x] Launch Codex in the configured project's local directory with explicit model,
       reasoning, sandbox, and approval settings.
-- [ ] Use the minimum permissions that still allow the agreed fully autonomous task
+- [x] Use the minimum permissions that still allow the agreed fully autonomous task
       workflow. Do not introduce forceful Git behavior.
-- [ ] Capture the Codex thread ID immediately and persist it on the execution.
-- [ ] Consume JSONL/streamed events and store useful progress, command, file-change,
+- [x] Capture the Codex thread ID immediately and persist it on the execution.
+- [x] Consume JSONL/streamed events and store useful progress, command, file-change,
       usage, failure, and final-message information.
-- [ ] Prevent unbounded database growth by separating concise persisted events from
+- [x] Prevent unbounded database growth by separating concise persisted events from
       full raw logs and defining log retention.
-- [ ] Define and version a JSON Schema for the final Codex response. It must include:
+- [x] Define and version a JSON Schema for the final Codex response. It must include:
       status, summary, completed items, incomplete items, failure category, failure
       reason, retry recommendation, commit SHA when applicable, and pushed state.
-- [ ] Treat malformed or missing structured output as a failed attempt, not success.
-- [ ] Add timeout and cancellation behavior. Cancellation must terminate the child
+- [x] Treat malformed or missing structured output as a failed attempt, not success.
+- [x] Add timeout and cancellation behavior. Cancellation must terminate the child
       execution without starting another task early.
-- [ ] Implement one normal retry by resuming the same Codex thread with the original
+- [x] Implement one normal retry by resuming the same Codex thread with the original
       failure context.
-- [ ] Distinguish normal failures from rate-limit failures. At this phase, rate-limit
+- [x] Distinguish normal failures from rate-limit failures. At this phase, rate-limit
       failures may enter `waiting_quota`; Phase 5 will implement reset-aware wakeup.
-- [ ] Store per-turn token usage supplied by Codex events.
-- [ ] Display live activity and the final structured result in the dashboard.
-- [ ] Ensure logs and error payloads redact known authentication values.
+- [x] Store per-turn token usage supplied by Codex events.
+- [x] Display live activity and the final structured result in the dashboard.
+- [x] Ensure logs and error payloads redact known authentication values.
 
 ### Acceptance criteria
 

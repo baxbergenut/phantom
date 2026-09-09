@@ -1,14 +1,15 @@
 # Phantom
 
 Phantom is a local, single-user dashboard for managing Codex tasks across local Git
-repositories. Phase 2 adds a durable single-task scheduler and a fake executor for
-testing orchestration safely; it does not run Codex or change registered repositories.
+repositories. Phase 3 runs queued work through the local Codex CLI, persists live
+activity and structured results, and safely resumes the same thread for one retry.
 
 ## Requirements
 
 - Node.js 24 or newer
 - npm 11 or newer
 - Git available on `PATH`
+- Codex CLI available on `PATH` and authenticated with `codex login`
 
 ## Run Phantom
 
@@ -47,7 +48,7 @@ The checked-in `.env.example` documents available settings. This checkout also h
 ignored local `.env` configured for `127.0.0.1:4310` and `data/phantom.db`. Windows
 service packaging remains intentionally deferred to Phase 8.
 
-## Phase 2 behavior
+## Phase 3 behavior
 
 - Project paths are resolved and validated with read-only Git commands.
 - Tasks are created in `queued` and the scheduler runs one task at a time.
@@ -59,17 +60,34 @@ service packaging remains intentionally deferred to Phase 8.
 - Scheduler acquisition and task transition use one immediate SQLite transaction and
   a database-backed global lease.
 - Every task transition and execution attempt is persisted. Stale or gracefully
-  interrupted fake executions resume with the same execution ID and attempt number.
+  interrupted executions resume with the same execution ID, attempt number, and Codex
+  thread.
 - Worker health, current work, next eligible work, and task history are available in
   both the API and dashboard.
-- Fake tasks succeed after a short delay by default. Put `[fake:failure]`,
-  `[fake:crash]`, or `[fake:delay=1000]` in task instructions to exercise deterministic
-  failure, one-time crash recovery, or delay behavior.
+- Startup verifies the Codex executable, version output, authentication, JSONL events,
+  output-schema support, and final-message support before accepting work.
+- Codex runs in the configured project directory with an explicit model, reasoning
+  effort, workspace-write sandbox, and no-interactive-approval policy. Phase 3 forbids
+  pushes; Git synchronization and direct push arrive in Phase 4.
+- Executions store the Codex thread ID, concise live events, aggregate per-turn token
+  usage, and a validated versioned final result. Invalid or missing structured output
+  fails the attempt.
+- Normal failure receives at most one retry in the same Codex thread. Rate limits enter
+  `waiting_quota`; reset-aware wakeup arrives in Phase 5.
+- Active work can be cancelled from the dashboard. Timeout and cancellation terminate
+  the child process and are stored as distinct failure categories before the scheduler
+  releases its global lease.
+- Full redacted JSONL logs live beside the database under `execution-logs`, separate
+  from concise database events. Logs older than 14 days are pruned, with at most 100
+  execution log pairs retained.
 - The backend and dashboard bind to loopback by default.
 
 The scheduler polls every 60 seconds. The optional environment settings
 `PHANTOM_SCHEDULER_INTERVAL_MS`, `PHANTOM_HEARTBEAT_INTERVAL_MS`,
 `PHANTOM_STALE_EXECUTION_MS`, and `PHANTOM_LEASE_DURATION_MS` override its timing.
+`PHANTOM_CODEX_EXECUTABLE`, `PHANTOM_CODEX_MODEL`, `PHANTOM_CODEX_REASONING`, and
+`PHANTOM_CODEX_TIMEOUT_MS` configure Codex; defaults are `codex`, `gpt-5.6-sol`,
+`high`, and one hour.
 
 The full roadmap and locked safety decisions are in
 [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).

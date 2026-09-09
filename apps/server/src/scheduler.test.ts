@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { openDatabase, type PhantomDatabase } from './db/index.js';
-import { FakeExecutor, type FakeScenario } from './fake-executor.js';
+import { FakeExecutor, type FakeScenario, type TaskExecutor } from './fake-executor.js';
 import { Scheduler } from './scheduler.js';
 import {
   allowedTaskTransitions,
@@ -160,6 +160,72 @@ describe('persistent scheduler', () => {
     await second.tick();
     expect(taskStatus(database, 'shutdown-task')).toBe('completed');
     expect(executionCount(database, 'shutdown-task')).toBe(1);
+  });
+
+  it('persists Codex thread, retry, events, usage, and structured final result', async () => {
+    insertTask(database, 'codex-task', 'normal', '2026-01-01T00:00:00.000Z');
+    const finalResult = {
+      schemaVersion: 1 as const,
+      status: 'completed' as const,
+      summary: 'Implemented and verified.',
+      completedItems: ['Implementation', 'Tests'],
+      incompleteItems: [],
+      failureCategory: 'none' as const,
+      failureReason: null,
+      retryRecommended: false,
+      commitSha: null,
+      pushed: false,
+    };
+    const executor: TaskExecutor = {
+      async execute(context) {
+        context.setThreadId('0199-persisted-thread');
+        context.reportEvent('progress', 'Inspecting files.');
+        context.beginRetry('The first result was malformed.');
+        context.reportEvent('usage', 'Retry completed.', { inputTokens: 10, outputTokens: 5 });
+        return {
+          status: 'completed',
+          reason: finalResult.summary,
+          finalResult,
+          tokenUsage: { inputTokens: 10, cachedInputTokens: 0, outputTokens: 5 },
+          rawLogPath: 'C:\\logs\\execution.jsonl',
+        };
+      },
+    };
+    await new Scheduler(database, { executor }).tick();
+
+    expect(eventStatuses(database, 'codex-task')).toEqual([
+      'running',
+      'retrying',
+      'running',
+      'completed',
+    ]);
+    const execution = database.sqlite
+      .prepare(
+        `SELECT codex_thread_id AS codexThreadId, retry_count AS retryCount,
+                final_result AS finalResult, token_usage AS tokenUsage, raw_log_path AS rawLogPath
+         FROM executions WHERE task_id = ?`,
+      )
+      .get('codex-task') as {
+      codexThreadId: string;
+      retryCount: number;
+      finalResult: string;
+      tokenUsage: string;
+      rawLogPath: string;
+    };
+    expect(execution.codexThreadId).toBe('0199-persisted-thread');
+    expect(execution.retryCount).toBe(1);
+    expect(JSON.parse(execution.finalResult)).toEqual(finalResult);
+    expect(JSON.parse(execution.tokenUsage)).toMatchObject({ outputTokens: 5 });
+    expect(execution.rawLogPath).toContain('execution.jsonl');
+    expect(
+      (
+        database.sqlite
+          .prepare(
+            'SELECT COUNT(*) AS count FROM execution_events WHERE execution_id IN (SELECT id FROM executions WHERE task_id = ?)',
+          )
+          .get('codex-task') as { count: number }
+      ).count,
+    ).toBe(3);
   });
 
   it('rejects invalid transitions without recording an event', () => {

@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"0199-test-thread"}
+{"type":"item.completed","item":{"id":"item-1","type":"agent_message","text":"Inspecting the scheduler contract."}}
+{"type":"item.completed","item":{"id":"item-2","type":"command_execution","command":"npm test","status":"completed","exit_code":0,"aggregated_output":"19 tests passed"}}
+{"type":"item.completed","item":{"id":"item-3","type":"file_change","status":"completed","changes":[{"path":"src/app.ts","kind":"update"}]}}
+{"type":"turn.completed","usage":{"input_tokens":120,"cached_input_tokens":20,"output_tokens":45}}
+{"type":"turn.failed","message":"Rate limit reached; retry after quota reset."}

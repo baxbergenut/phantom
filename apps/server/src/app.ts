@@ -18,7 +18,7 @@ import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import Fastify from 'fastify';
 
 import { openDatabase } from './db/index.js';
-import { executions, projects, settings, taskEvents, tasks } from './db/schema.js';
+import { executionEvents, executions, projects, settings, taskEvents, tasks } from './db/schema.js';
 import type { TaskExecutor } from './fake-executor.js';
 import { HttpError, parseBody } from './http.js';
 import { ProjectPathError, validateProjectPath } from './project-validation.js';
@@ -92,7 +92,7 @@ export async function createApp(options: AppOptions = {}) {
     return { status: 'ok', database: 'connected', timestamp: new Date().toISOString() };
   });
 
-  app.get('/api/version', () => ({ name: 'phantom', version: '0.1.0', phase: 2 }));
+  app.get('/api/version', () => ({ name: 'phantom', version: '0.1.0', phase: 3 }));
 
   app.get('/api/projects', () =>
     database.db.select().from(projects).orderBy(asc(projects.name)).all(),
@@ -310,6 +310,28 @@ export async function createApp(options: AppOptions = {}) {
       .where(eq(executions.taskId, id))
       .orderBy(desc(executions.attemptNumber))
       .all();
+  });
+
+  app.get('/api/executions/:id/events', (request) => {
+    const { id } = request.params as { id: string };
+    const execution = database.db
+      .select({ id: executions.id })
+      .from(executions)
+      .where(eq(executions.id, id))
+      .get();
+    if (!execution) throw new HttpError(404, 'Execution not found.');
+    return database.db
+      .select()
+      .from(executionEvents)
+      .where(eq(executionEvents.executionId, id))
+      .orderBy(asc(executionEvents.sequence))
+      .all();
+  });
+
+  app.post('/api/worker/cancel', (_request, reply) => {
+    if (!scheduler.cancelActiveTask())
+      throw new HttpError(409, 'There is no active task to cancel.');
+    return reply.status(202).send({ accepted: true });
   });
 
   app.get('/api/settings/worker', () => getWorkerSetting(database));

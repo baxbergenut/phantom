@@ -1,22 +1,43 @@
+import type { CodexEventKind, CodexFinalResult, TokenUsage } from '@phantom/shared';
+
 export interface ExecutorTask {
   id: string;
   title: string;
   instructions: string;
   projectId: string;
   projectName: string;
+  projectPath: string;
   executionId: string;
   attemptNumber: number;
   recoveryCount: number;
+  codexThreadId: string | null;
+  retryCount: number;
 }
 
 export interface ExecutorContext {
   task: ExecutorTask;
   signal: AbortSignal;
   heartbeat: () => void;
+  setThreadId: (threadId: string) => void;
+  reportEvent: (kind: CodexEventKind, message: string, metadata?: Record<string, unknown>) => void;
+  beginRetry: (reason: string) => void;
 }
 
 export type ExecutorResult =
-  { status: 'completed'; reason?: string } | { status: 'failed'; reason: string };
+  | {
+      status: 'completed';
+      reason?: string;
+      finalResult?: CodexFinalResult;
+      tokenUsage?: TokenUsage;
+      rawLogPath?: string;
+    }
+  | {
+      status: 'failed' | 'waiting_quota';
+      reason: string;
+      finalResult?: CodexFinalResult;
+      tokenUsage?: TokenUsage;
+      rawLogPath?: string;
+    };
 
 export interface TaskExecutor {
   execute(context: ExecutorContext): Promise<ExecutorResult>;

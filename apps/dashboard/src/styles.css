@@ -640,6 +640,24 @@ textarea {
   color: #aeb9c8;
   font-size: 0.72rem;
 }
+.execution-list > div {
+  display: grid;
+  gap: 7px;
+  width: 100%;
+}
+.execution-list code,
+.execution-list small {
+  color: var(--muted);
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+.execution-events {
+  margin: 16px 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: #101824;
+}
 
 @media (max-width: 750px) {
   header {

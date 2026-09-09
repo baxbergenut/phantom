@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import type Database from 'better-sqlite3';
 
-import type { TaskPriority, WorkerHealth } from '@phantom/shared';
+import type { CodexEventKind, TaskPriority, WorkerHealth } from '@phantom/shared';
 
 import type { PhantomDatabase } from './db/index.js';
 import {
@@ -52,6 +52,7 @@ interface QueuedTaskRow {
   instructions: string;
   projectId: string;
   projectName: string;
+  projectPath: string;
   priority: TaskPriority;
   attemptCount: number;
 }
@@ -61,6 +62,8 @@ interface RecoveringRow extends QueuedTaskRow {
   attemptNumber: number;
   recoveryCount: number;
   recoveryMetadata: string | null;
+  codexThreadId: string | null;
+  retryCount: number;
 }
 
 interface ActiveExecutionRow {
@@ -173,6 +176,15 @@ export class Scheduler {
     await this.activePromise;
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     this.heartbeatTimer = null;
+  }
+
+  cancelActiveTask(reason = 'Cancelled by the operator.'): boolean {
+    if (!this.activeWork || !this.abortController || this.abortController.signal.aborted) {
+      return false;
+    }
+    this.reportExecutionEvent(this.activeWork, 'failure', reason, { category: 'cancelled' });
+    this.abortController.abort(new DOMException(reason, 'AbortError'));
+    return true;
   }
 
   getHealth(): WorkerHealth {
@@ -334,8 +346,10 @@ export class Scheduler {
           .prepare(
             `SELECT e.id AS executionId, e.attempt_number AS attemptNumber,
                     e.recovery_count AS recoveryCount, e.recovery_metadata AS recoveryMetadata,
+                    e.codex_thread_id AS codexThreadId, e.retry_count AS retryCount,
                     t.id, t.title, t.instructions, t.project_id AS projectId,
-                    p.name AS projectName, t.priority, t.attempt_count AS attemptCount
+                    p.name AS projectName, p.local_path AS projectPath,
+                    t.priority, t.attempt_count AS attemptCount
              FROM executions e
              JOIN tasks t ON t.id = e.task_id
              JOIN projects p ON p.id = t.project_id
@@ -401,7 +415,7 @@ export class Scheduler {
           taskId: task.id,
           newStatus: 'running',
           expectedStatus: 'queued',
-          reason: 'Acquired by the fake executor.',
+          reason: 'Acquired by the Codex executor.',
           executionId,
           correlationId: executionId,
           now: nowIso,
@@ -412,6 +426,8 @@ export class Scheduler {
           executionId,
           attemptNumber,
           recoveryCount: 0,
+          codexThreadId: null,
+          retryCount: 0,
           correlationId: executionId,
         };
         this.logger.info(this.logContext(work), 'Queued task acquired.');
@@ -427,16 +443,31 @@ export class Scheduler {
         task: work,
         signal,
         heartbeat: () => this.heartbeat(work),
+        setThreadId: (threadId) => this.setThreadId(work, threadId),
+        reportEvent: (kind, message, metadata) =>
+          this.reportExecutionEvent(work, kind, message, metadata),
+        beginRetry: (reason) => this.beginRetry(work, reason),
       });
       if (this.stopping) return;
-      this.finishExecution(work, result.status, result.reason);
+      this.reportExecutionEvent(
+        work,
+        'final',
+        result.reason ??
+          (result.status === 'completed' ? 'Execution completed.' : 'Execution failed.'),
+        result.finalResult as unknown as Record<string, unknown> | undefined,
+      );
+      this.finishExecution(work, result.status, result.reason, {
+        finalResult: result.finalResult,
+        tokenUsage: result.tokenUsage,
+        rawLogPath: result.rawLogPath,
+      });
     } catch (error) {
       if (this.stopping && signal.aborted) return;
       if (error instanceof SimulatedCrashError) {
         this.logger.error(this.logContext(work), error.message);
         return;
       }
-      const reason = error instanceof Error ? error.message : 'Unknown fake executor error.';
+      const reason = error instanceof Error ? error.message : 'Unknown executor error.';
       this.finishExecution(work, 'failed', reason);
     } finally {
       if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
@@ -446,8 +477,13 @@ export class Scheduler {
 
   private finishExecution(
     work: WorkRow,
-    result: 'completed' | 'failed',
-    reason = result === 'completed' ? 'Fake executor completed successfully.' : 'Execution failed.',
+    result: 'completed' | 'failed' | 'waiting_quota',
+    reason = result === 'completed' ? 'Codex completed successfully.' : 'Execution failed.',
+    details?: {
+      finalResult?: unknown | undefined;
+      tokenUsage?: unknown | undefined;
+      rawLogPath?: string | undefined;
+    },
   ): void {
     const now = this.now().toISOString();
     this.database.sqlite
@@ -461,7 +497,7 @@ export class Scheduler {
           newStatus: result,
           expectedStatus: 'running',
           reason,
-          statusReason: result === 'failed' ? reason : null,
+          statusReason: result === 'completed' ? null : reason,
           executionId: work.executionId,
           correlationId: work.correlationId,
           now,
@@ -469,9 +505,21 @@ export class Scheduler {
         this.database.sqlite
           .prepare(
             `UPDATE executions SET state = ?, finished_at = ?, heartbeat_at = ?,
-               error = ?, updated_at = ? WHERE id = ?`,
+               error = ?, final_result = COALESCE(?, final_result),
+               token_usage = COALESCE(?, token_usage), raw_log_path = COALESCE(?, raw_log_path),
+               updated_at = ? WHERE id = ?`,
           )
-          .run(result, now, now, result === 'failed' ? reason : null, now, work.executionId);
+          .run(
+            result === 'completed' ? 'completed' : 'failed',
+            now,
+            now,
+            result === 'completed' ? null : reason,
+            details?.finalResult ? JSON.stringify(details.finalResult) : null,
+            details?.tokenUsage ? JSON.stringify(details.tokenUsage) : null,
+            details?.rawLogPath ?? null,
+            now,
+            work.executionId,
+          );
         this.releaseLease(now, false);
       })
       .immediate();
@@ -510,7 +558,8 @@ export class Scheduler {
     return this.database.sqlite
       .prepare(
         `SELECT t.id, t.title, t.instructions, t.project_id AS projectId,
-                p.name AS projectName, t.priority, t.attempt_count AS attemptCount
+                p.name AS projectName, p.local_path AS projectPath,
+                t.priority, t.attempt_count AS attemptCount
          FROM tasks t JOIN projects p ON p.id = t.project_id
          WHERE t.status = 'queued' AND p.enabled = true
          ORDER BY CASE t.priority
@@ -538,6 +587,71 @@ export class Scheduler {
          WHERE key = ? AND (worker_id = ? OR worker_id IS NULL)`,
       )
       .run(now, shuttingDown ? 1 : 0, now, leaseKey, this.workerId);
+  }
+
+  private setThreadId(work: WorkRow, threadId: string): void {
+    this.database.sqlite
+      .prepare(
+        `UPDATE executions SET codex_thread_id = COALESCE(codex_thread_id, ?), updated_at = ?
+         WHERE id = ? AND state = 'running' AND worker_id = ?`,
+      )
+      .run(threadId, this.now().toISOString(), work.executionId, this.workerId);
+  }
+
+  private reportExecutionEvent(
+    work: WorkRow,
+    kind: CodexEventKind,
+    message: string,
+    metadata?: Record<string, unknown>,
+  ): void {
+    const now = this.now().toISOString();
+    this.database.sqlite
+      .prepare(
+        `INSERT INTO execution_events
+         (id, execution_id, sequence, kind, message, metadata, created_at)
+         SELECT ?, ?, COALESCE(MAX(sequence), 0) + 1, ?, ?, ?, ?
+         FROM execution_events WHERE execution_id = ?`,
+      )
+      .run(
+        randomUUID(),
+        work.executionId,
+        kind,
+        message.slice(0, 4_000),
+        metadata ? JSON.stringify(metadata) : null,
+        now,
+        work.executionId,
+      );
+  }
+
+  private beginRetry(work: WorkRow, reason: string): void {
+    const now = this.now().toISOString();
+    this.database.sqlite
+      .transaction(() => {
+        transitionTaskInTransaction(this.database.sqlite, {
+          taskId: work.id,
+          newStatus: 'retrying',
+          expectedStatus: 'running',
+          reason: `Retrying the same Codex thread: ${reason}`,
+          executionId: work.executionId,
+          correlationId: work.correlationId,
+          now,
+        });
+        this.database.sqlite
+          .prepare(
+            'UPDATE executions SET retry_count = retry_count + 1, updated_at = ? WHERE id = ?',
+          )
+          .run(now, work.executionId);
+        transitionTaskInTransaction(this.database.sqlite, {
+          taskId: work.id,
+          newStatus: 'running',
+          expectedStatus: 'retrying',
+          reason: 'Same-thread Codex retry started.',
+          executionId: work.executionId,
+          correlationId: work.correlationId,
+          now,
+        });
+      })
+      .immediate();
   }
 
   private resetShutdownMarker(): void {

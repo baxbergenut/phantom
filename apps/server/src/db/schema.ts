@@ -1,7 +1,14 @@
 import { sql } from 'drizzle-orm';
 import { check, index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
-import type { ExecutionState, TaskPriority, TaskStatus } from '@phantom/shared';
+import type {
+  CodexEventKind,
+  CodexFinalResult,
+  ExecutionState,
+  TaskPriority,
+  TaskStatus,
+  TokenUsage,
+} from '@phantom/shared';
 
 export const projects = sqliteTable(
   'projects',
@@ -72,6 +79,11 @@ export const executions = sqliteTable(
     recoveryCount: integer('recovery_count').notNull().default(0),
     recoveryMetadata: text('recovery_metadata', { mode: 'json' }).$type<Record<string, unknown>>(),
     error: text('error'),
+    codexThreadId: text('codex_thread_id'),
+    retryCount: integer('retry_count').notNull().default(0),
+    finalResult: text('final_result', { mode: 'json' }).$type<CodexFinalResult>(),
+    tokenUsage: text('token_usage', { mode: 'json' }).$type<TokenUsage>(),
+    rawLogPath: text('raw_log_path'),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
   },
@@ -84,6 +96,30 @@ export const executions = sqliteTable(
     ),
     check('executions_attempt_number_check', sql`${table.attemptNumber} > 0`),
     check('executions_recovery_count_check', sql`${table.recoveryCount} >= 0`),
+    check('executions_retry_count_check', sql`${table.retryCount} >= 0`),
+  ],
+);
+
+export const executionEvents = sqliteTable(
+  'execution_events',
+  {
+    id: text('id').primaryKey(),
+    executionId: text('execution_id')
+      .notNull()
+      .references(() => executions.id, { onDelete: 'cascade' }),
+    sequence: integer('sequence').notNull(),
+    kind: text('kind').$type<CodexEventKind>().notNull(),
+    message: text('message').notNull(),
+    metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>(),
+    createdAt: text('created_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('execution_events_execution_sequence_unique').on(table.executionId, table.sequence),
+    index('execution_events_execution_created_idx').on(table.executionId, table.createdAt),
+    check(
+      'execution_events_kind_check',
+      sql`${table.kind} IN ('thread', 'progress', 'command', 'file_change', 'usage', 'failure', 'final')`,
+    ),
   ],
 );
 
