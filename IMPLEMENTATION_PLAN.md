@@ -617,18 +617,17 @@ Update this section at the end of every phase.
 - **Current completed phase:** Phase 1 — Foundation, database, projects, and task board
 - **Bootstrap state:** Complete; local `main` tracks `origin/main` on GitHub
 - **Next phase:** Phase 2 — Persistent single-task scheduler and restart recovery
-- **Last known good commit:** `54ca6ac` (Phase 1 implementation; a following
-  bookkeeping commit records phase completion)
-- **How to run:** `npm install`, `npm run db:migrate`, then `npm run dev`; open
-  `http://127.0.0.1:4311`
+- **Last known good commit:** `1bf6519` (one-command runnable Phase 1 application)
+- **How to run:** `npm install`, then `npm start`; open `http://127.0.0.1:4310`.
+  For live-reload development, use `npm run dev` and open `http://127.0.0.1:4311`.
 - **How to test:** `npm run format:check`, `npm run lint`, `npm run typecheck`,
   `npm test`, and `npm run build`
 - **Database/schema version:** `0000_phase_one`
 - **Important active decisions:** npm workspaces split shared contracts, Fastify API,
   and React dashboard; migrations are checked-in SQL applied automatically at API
   startup; Phase 1 exposes no task-start or arbitrary status-transition route
-- **Known issues or limitations:** No worker runs until Phase 2. Production dashboard
-  serving and Windows service packaging remain intentionally deferred to Phase 8.
+- **Known issues or limitations:** No worker runs until Phase 2. Windows service
+  packaging remains intentionally deferred to Phase 8.
 
 ## Phase Completion Log
 
