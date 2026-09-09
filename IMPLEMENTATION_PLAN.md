@@ -94,8 +94,8 @@ boundaries or locked decisions must be recorded in this file.
 ## Phase status
 
 - [x] Bootstrap prerequisite — Phantom is initialized on `main`, with
-  `https://github.com/baxbergenut/phantom.git` configured as `origin`.
-- [ ] Phase 1 — Foundation, database, projects, and task board
+      `https://github.com/baxbergenut/phantom.git` configured as `origin`.
+- [x] Phase 1 — Foundation, database, projects, and task board
 - [ ] Phase 2 — Persistent single-task scheduler and restart recovery
 - [ ] Phase 3 — Codex execution, structured results, and same-thread retries
 - [ ] Phase 4 — Git synchronization, commit verification, and direct push
@@ -114,16 +114,16 @@ Model availability and quota behavior can change. At the start of each phase, ch
 the models currently offered by the signed-in Codex client. Use the primary choice
 when available; use the fallback when quota is scarce or the primary is unavailable.
 
-| Phase | Primary model | Effort | Quota-saving fallback | Why |
-| --- | --- | --- | --- | --- |
-| 1 — Foundation and dashboard | `gpt-5.6-sol` | `high` | `gpt-5.6-terra` / `high` | Broad full-stack foundation, schema, and API contracts deserve careful architectural consistency. |
-| 2 — Scheduler and recovery | `gpt-5.6-sol` | `xhigh` | `gpt-5.6-sol` / `high` | Leasing, concurrency exclusion, state transitions, and crash recovery contain subtle correctness problems. |
-| 3 — Codex execution | `gpt-5.6-sol` | `xhigh` | `gpt-5.6-sol` / `high` | Process control, streamed protocol parsing, cancellation, persistence, and same-thread retry must agree precisely. |
-| 4 — Git and direct push | `gpt-6-astra` | `high` | `gpt-5.6-sol` / `xhigh` | This phase can modify and push real repositories; strong judgment and edge-case checking are worth the extra quota. |
-| 5 — Quota integration | `gpt-6-astra` | `high` | `gpt-5.6-sol` / `xhigh` | App Server protocol handling, multiple quota buckets, reset scheduling, and restart recovery form a high-stakes state machine. |
-| 6 — Classifier and model policy | `gpt-5.6-sol` | `high` | `gpt-5.6-terra` / `high` | Requires sound policy design and statistics, but the scope is narrower and well specified. |
-| 7 — Telegram reporting | `gpt-5.6-terra` | `medium` | `gpt-5.6-luna` / `high` | A bounded integration with clear acceptance criteria; Terra should handle it efficiently while still covering auth and deduplication. |
-| 8 — Windows packaging and hardening | `gpt-6-astra` | `xhigh` | `gpt-5.6-sol` / `xhigh` | Cross-system hardening, security review, restart testing, and final end-to-end validation require the strongest sustained judgment. |
+| Phase                               | Primary model   | Effort   | Quota-saving fallback    | Why                                                                                                                                   |
+| ----------------------------------- | --------------- | -------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 — Foundation and dashboard        | `gpt-5.6-sol`   | `high`   | `gpt-5.6-terra` / `high` | Broad full-stack foundation, schema, and API contracts deserve careful architectural consistency.                                     |
+| 2 — Scheduler and recovery          | `gpt-5.6-sol`   | `xhigh`  | `gpt-5.6-sol` / `high`   | Leasing, concurrency exclusion, state transitions, and crash recovery contain subtle correctness problems.                            |
+| 3 — Codex execution                 | `gpt-5.6-sol`   | `xhigh`  | `gpt-5.6-sol` / `high`   | Process control, streamed protocol parsing, cancellation, persistence, and same-thread retry must agree precisely.                    |
+| 4 — Git and direct push             | `gpt-6-astra`   | `high`   | `gpt-5.6-sol` / `xhigh`  | This phase can modify and push real repositories; strong judgment and edge-case checking are worth the extra quota.                   |
+| 5 — Quota integration               | `gpt-6-astra`   | `high`   | `gpt-5.6-sol` / `xhigh`  | App Server protocol handling, multiple quota buckets, reset scheduling, and restart recovery form a high-stakes state machine.        |
+| 6 — Classifier and model policy     | `gpt-5.6-sol`   | `high`   | `gpt-5.6-terra` / `high` | Requires sound policy design and statistics, but the scope is narrower and well specified.                                            |
+| 7 — Telegram reporting              | `gpt-5.6-terra` | `medium` | `gpt-5.6-luna` / `high`  | A bounded integration with clear acceptance criteria; Terra should handle it efficiently while still covering auth and deduplication. |
+| 8 — Windows packaging and hardening | `gpt-6-astra`   | `xhigh`  | `gpt-5.6-sol` / `xhigh`  | Cross-system hardening, security review, restart testing, and final end-to-end validation require the strongest sustained judgment.   |
 
 General rules for phase tasks:
 
@@ -143,7 +143,7 @@ General rules for phase tasks:
 
 ## Phase 1 — Foundation, database, projects, and task board
 
-**Status:** Planned
+**Status:** Complete
 
 ### Objective
 
@@ -152,35 +152,35 @@ managing projects and tasks. No Codex task should be launched in this phase.
 
 ### Required work
 
-- [ ] Establish the TypeScript project structure for the backend, dashboard, and
-  shared types. Prefer a small workspace/monorepo layout without unnecessary
-  infrastructure.
-- [ ] Add development, build, type-check, lint, test, database migration, and
-  production-start commands.
-- [ ] Configure Fastify and serve health/version endpoints.
-- [ ] Configure React/Vite and provide a usable localhost dashboard shell.
-- [ ] Configure SQLite and Drizzle migrations. The database file must live outside
-  tracked source files and must not be committed.
-- [ ] Create a `projects` model containing at least: ID, name, local path, remote
-  name, remote branch, enabled state, timestamps, and optional validation commands.
-- [ ] Create a `tasks` model containing at least: ID, project ID, title,
-  instructions, priority, status, timestamps, attempt count, and status reason.
-- [ ] Define task statuses centrally: `queued`, `classifying`, `waiting_quota`,
-  `running`, `retrying`, `completed`, `failed`, and `blocked`.
-- [ ] Add API validation and shared request/response types.
-- [ ] Implement project create, list, edit, enable/disable, and delete operations.
-- [ ] Validate that a project path exists and appears to be a Git repository. Do
-  not modify the repository during validation.
-- [ ] Implement task create, list, view, edit, reprioritize, cancel/delete while
-  queued, and manually requeue failed/blocked tasks.
-- [ ] Implement priority ordering: urgent, high, normal, low; ties use creation time.
-- [ ] Build dashboard views for the project list, project editor, Kanban-style task
-  board, task form, and task details.
-- [ ] Add a global worker pause/resume setting even though the worker is not active
-  yet. Store it durably in the database.
-- [ ] Add clear empty, loading, validation-error, and backend-offline UI states.
-- [ ] Add a `.env.example` containing names only, never real credentials.
-- [ ] Write initial developer setup and run instructions in the project README.
+- [x] Establish the TypeScript project structure for the backend, dashboard, and
+      shared types. Prefer a small workspace/monorepo layout without unnecessary
+      infrastructure.
+- [x] Add development, build, type-check, lint, test, database migration, and
+      production-start commands.
+- [x] Configure Fastify and serve health/version endpoints.
+- [x] Configure React/Vite and provide a usable localhost dashboard shell.
+- [x] Configure SQLite and Drizzle migrations. The database file must live outside
+      tracked source files and must not be committed.
+- [x] Create a `projects` model containing at least: ID, name, local path, remote
+      name, remote branch, enabled state, timestamps, and optional validation commands.
+- [x] Create a `tasks` model containing at least: ID, project ID, title,
+      instructions, priority, status, timestamps, attempt count, and status reason.
+- [x] Define task statuses centrally: `queued`, `classifying`, `waiting_quota`,
+      `running`, `retrying`, `completed`, `failed`, and `blocked`.
+- [x] Add API validation and shared request/response types.
+- [x] Implement project create, list, edit, enable/disable, and delete operations.
+- [x] Validate that a project path exists and appears to be a Git repository. Do
+      not modify the repository during validation.
+- [x] Implement task create, list, view, edit, reprioritize, cancel/delete while
+      queued, and manually requeue failed/blocked tasks.
+- [x] Implement priority ordering: urgent, high, normal, low; ties use creation time.
+- [x] Build dashboard views for the project list, project editor, Kanban-style task
+      board, task form, and task details.
+- [x] Add a global worker pause/resume setting even though the worker is not active
+      yet. Store it durably in the database.
+- [x] Add clear empty, loading, validation-error, and backend-offline UI states.
+- [x] Add a `.env.example` containing names only, never real credentials.
+- [x] Write initial developer setup and run instructions in the project README.
 
 ### Acceptance criteria
 
@@ -215,25 +215,25 @@ Codex quota or modifying repositories.
 ### Required work
 
 - [ ] Add an `executions` model for task runs, including task ID, attempt number,
-  lifecycle state, timestamps, worker identity, heartbeat, and recovery metadata.
+      lifecycle state, timestamps, worker identity, heartbeat, and recovery metadata.
 - [ ] Add a durable event/history model so every task status transition has a
-  timestamp, previous state, new state, and reason.
+      timestamp, previous state, new state, and reason.
 - [ ] Implement a scheduler tick, defaulting to every 60 seconds and configurable.
 - [ ] Select only enabled projects and queued tasks, ordered by priority and creation
-  time.
+      time.
 - [ ] Enforce a database-backed global lease so no second worker or duplicate timer
-  can start another task.
+      can start another task.
 - [ ] Make acquisition and task transition atomic in SQLite.
 - [ ] Respect the durable global pause flag.
 - [ ] Add graceful shutdown behavior that stops taking work and records the state of
-  any active execution.
+      any active execution.
 - [ ] Add worker heartbeats and stale-execution detection.
 - [ ] Define restart recovery rules. A stale fake execution should be recovered or
-  returned to a resumable state without creating a duplicate attempt.
+      returned to a resumable state without creating a duplicate attempt.
 - [ ] Add a fake executor capable of success, delay, failure, and simulated crash so
-  scheduler behavior can be tested deterministically.
+      scheduler behavior can be tested deterministically.
 - [ ] Expose worker health, last poll time, current task, next eligible task, and
-  pause state through the API and dashboard.
+      pause state through the API and dashboard.
 - [ ] Make task state transitions explicit and reject invalid transitions.
 - [ ] Record structured application logs with correlation IDs for task and execution.
 
@@ -269,28 +269,28 @@ machine-readable progress and require a structured final answer.
 ### Required work
 
 - [ ] Choose and document whether the first implementation uses the Codex SDK or
-  `codex exec`. Keep the integration behind an adapter interface.
+      `codex exec`. Keep the integration behind an adapter interface.
 - [ ] Add a startup capability check for the installed Codex version, authentication,
-  executable availability, and required output features.
+      executable availability, and required output features.
 - [ ] Launch Codex in the configured project's local directory with explicit model,
-  reasoning, sandbox, and approval settings.
+      reasoning, sandbox, and approval settings.
 - [ ] Use the minimum permissions that still allow the agreed fully autonomous task
-  workflow. Do not introduce forceful Git behavior.
+      workflow. Do not introduce forceful Git behavior.
 - [ ] Capture the Codex thread ID immediately and persist it on the execution.
 - [ ] Consume JSONL/streamed events and store useful progress, command, file-change,
-  usage, failure, and final-message information.
+      usage, failure, and final-message information.
 - [ ] Prevent unbounded database growth by separating concise persisted events from
-  full raw logs and defining log retention.
+      full raw logs and defining log retention.
 - [ ] Define and version a JSON Schema for the final Codex response. It must include:
-  status, summary, completed items, incomplete items, failure category, failure
-  reason, retry recommendation, commit SHA when applicable, and pushed state.
+      status, summary, completed items, incomplete items, failure category, failure
+      reason, retry recommendation, commit SHA when applicable, and pushed state.
 - [ ] Treat malformed or missing structured output as a failed attempt, not success.
 - [ ] Add timeout and cancellation behavior. Cancellation must terminate the child
-  execution without starting another task early.
+      execution without starting another task early.
 - [ ] Implement one normal retry by resuming the same Codex thread with the original
-  failure context.
+      failure context.
 - [ ] Distinguish normal failures from rate-limit failures. At this phase, rate-limit
-  failures may enter `waiting_quota`; Phase 5 will implement reset-aware wakeup.
+      failures may enter `waiting_quota`; Phase 5 will implement reset-aware wakeup.
 - [ ] Store per-turn token usage supplied by Codex events.
 - [ ] Display live activity and the final structured result in the dashboard.
 - [ ] Ensure logs and error payloads redact known authentication values.
@@ -330,30 +330,30 @@ work to GitHub, while refusing unsafe repository states.
 ### Required work
 
 - [ ] Implement a Git adapter using argument arrays rather than shell-built command
-  strings.
+      strings.
 - [ ] Resolve and validate the configured repository path before every operation.
 - [ ] Add preflight checks for: Git repository, clean working tree, configured branch
-  checked out, configured remote present, and reachable remote.
+      checked out, configured remote present, and reachable remote.
 - [ ] Fetch the remote and require local HEAD to be compatible with the remote branch.
 - [ ] Synchronize before execution using fast-forward-only behavior.
 - [ ] If the working tree is dirty, the branch is wrong, or history has diverged,
-  move the task to `blocked` with a precise reason. Never discard or stash changes
-  automatically.
+      move the task to `blocked` with a precise reason. Never discard or stash changes
+      automatically.
 - [ ] Persist starting HEAD, starting remote SHA, ending HEAD, and ending remote SHA.
 - [ ] Add explicit Git instructions to the Codex task contract: implement the task,
-  commit meaningful changes, and push to the configured branch without force.
+      commit meaningful changes, and push to the configured branch without force.
 - [ ] Ensure Codex uses an informative commit message related to the task.
 - [ ] Handle tasks that correctly produce no changes; require Codex to say why no
-  commit was necessary.
+      commit was necessary.
 - [ ] After Codex reports completion, fetch the remote and independently verify that
-  the claimed commit is reachable from the configured remote branch.
+      the claimed commit is reachable from the configured remote branch.
 - [ ] A completion that required changes must not be marked complete until remote
-  verification succeeds.
+      verification succeeds.
 - [ ] If push is rejected because the remote advanced, resume the same Codex thread
-  once with the exact Git failure. Never automatically force-push.
+      once with the exact Git failure. Never automatically force-push.
 - [ ] Record changed-file summaries and commit metadata for reports.
 - [ ] Add prominent dashboard warnings explaining that enabled projects allow direct
-  automated pushes to the configured branch.
+      automated pushes to the configured branch.
 
 ### Acceptance criteria
 
@@ -390,30 +390,30 @@ resume quota-interrupted tasks after the relevant reset.
 
 - [ ] Add a narrow Codex App Server client behind a quota-provider interface.
 - [ ] Implement initialization, request IDs, response correlation, reconnects,
-  timeouts, and clean shutdown.
+      timeouts, and clean shutdown.
 - [ ] Read `account/rateLimits/read` and consume rate-limit update notifications.
 - [ ] Support multiple returned buckets rather than assuming array order or a fixed
-  number of limits.
+      number of limits.
 - [ ] Store snapshots containing limit ID, used percentage, window duration, reset
-  timestamp, plan type when supplied, and observation time.
+      timestamp, plan type when supplied, and observation time.
 - [ ] Identify the active short and weekly windows by duration/metadata rather than
-  blindly labeling primary and secondary fields.
+      blindly labeling primary and secondary fields.
 - [ ] Display current consumption, remaining percentage, reset times, and snapshot
-  freshness in the dashboard.
+      freshness in the dashboard.
 - [ ] Take a fresh quota snapshot immediately before dispatch and after every attempt.
 - [ ] If a fresh snapshot cannot be obtained, do not start a new task. Mark it waiting
-  with a clear degraded-service reason.
+      with a clear degraded-service reason.
 - [ ] Implement configurable reserves, initially 15% for the five-hour window and 10%
-  for the weekly window.
+      for the weekly window.
 - [ ] Add initial usage estimates by complexity class: small 10%, medium 20%, large
-  35%, very large 50% of usable short-window capacity. Keep these configurable.
+      35%, very large 50% of usable short-window capacity. Keep these configurable.
 - [ ] Gate dispatch using remaining quota, configured reserves, and the task estimate.
 - [ ] When Codex or the quota provider reports exhaustion, enter `waiting_quota`,
-  store the reset timestamp, and schedule wakeup with a small safety delay.
+      store the reset timestamp, and schedule wakeup with a small safety delay.
 - [ ] On reset, refresh limits and resume the same Codex thread. Do not increment the
-  normal retry count for quota waits.
+      normal retry count for quota waits.
 - [ ] Record before/after quota deltas for each execution and prepare the history that
-  Phase 6 will use for improved estimates.
+      Phase 6 will use for improved estimates.
 - [ ] Recover reset timers correctly after application or PC restart.
 
 ### Acceptance criteria
@@ -451,30 +451,30 @@ Codex model tier, and improve usage estimates using execution history.
 
 - [ ] Add Ollama connection settings and a startup/health check.
 - [ ] Select and document a small quantized 3–4B model suitable for CPU inference on
-  a Windows PC with 16 GB RAM and approximately 500 MB dedicated GPU memory.
+      a Windows PC with 16 GB RAM and approximately 500 MB dedicated GPU memory.
 - [ ] Keep the Ollama model configurable and do not assume GPU acceleration.
 - [ ] Define a versioned structured classification schema containing: complexity,
-  risk, confidence, rationale, model tier, reasoning level, estimated runtime class,
-  estimated quota class, and human-attention flags.
+      risk, confidence, rationale, model tier, reasoning level, estimated runtime class,
+      estimated quota class, and human-attention flags.
 - [ ] Build the classifier prompt from task text and minimal project metadata. Do not
-  expose stored secrets or unrelated repository content.
+      expose stored secrets or unrelated repository content.
 - [ ] Add deterministic scoring for task size, keywords, acceptance criteria, and
-  risky categories such as migrations, authentication, deployment, broad refactors,
-  destructive operations, and dependency upgrades.
+      risky categories such as migrations, authentication, deployment, broad refactors,
+      destructive operations, and dependency upgrades.
 - [ ] Let deterministic safety rules increase risk/tier even when the local model
-  recommends a lower level.
+      recommends a lower level.
 - [ ] Implement a deterministic-only fallback when Ollama is missing, slow, invalid,
-  or returns malformed output.
+      or returns malformed output.
 - [ ] Define configurable model tiers rather than hardcoding product assumptions:
-  economy, standard, advanced, and premium.
+      economy, standard, advanced, and premium.
 - [ ] Map each tier to a Codex model and reasoning effort in settings. Validate model
-  availability before dispatch and define a fallback order.
+      availability before dispatch and define a fallback order.
 - [ ] Persist the chosen model, reasoning effort, rationale, classifier version, and
-  whether fallback logic was used.
+      whether fallback logic was used.
 - [ ] Use historical before/after quota deltas grouped by model and complexity to
-  refine initial estimates conservatively once sufficient samples exist.
+      refine initial estimates conservatively once sufficient samples exist.
 - [ ] Prevent one unusual task from radically changing estimates; use minimum sample
-  counts, bounds, and conservative percentiles.
+      counts, bounds, and conservative percentiles.
 - [ ] Display the classification and model-selection explanation in the dashboard.
 
 ### Acceptance criteria
@@ -509,27 +509,27 @@ chat using outbound long polling, without exposing the dashboard publicly.
 
 - [ ] Integrate a maintained Telegram Bot API library using long polling.
 - [ ] Store the bot token outside Git. Prefer an OS-backed secret mechanism when
-  practical, with an environment-variable fallback documented for development.
+      practical, with an environment-variable fallback documented for development.
 - [ ] Add a setup flow that validates the bot token and captures/authorizes exactly
-  one Telegram chat ID.
+      one Telegram chat ID.
 - [ ] Ignore commands and messages from unauthorized chat IDs.
 - [ ] Send completion reports containing project, task, selected model tier, duration,
-  attempt count, concise summary, commit SHA or no-change explanation, push status,
-  and before/after quota percentages.
+      attempt count, concise summary, commit SHA or no-change explanation, push status,
+      and before/after quota percentages.
 - [ ] Send failure reports containing category, attempts, useful reason, and whether
-  the task can be manually requeued.
+      the task can be manually requeued.
 - [ ] Send blocked reports for unsafe Git state, authentication problems, unavailable
-  Codex, missing fresh quota data, and other user-action conditions.
+      Codex, missing fresh quota data, and other user-action conditions.
 - [ ] Send a quota-wait notification when a task first pauses, including the expected
-  reset time. Avoid repeated unchanged notifications.
+      reset time. Avoid repeated unchanged notifications.
 - [ ] Send a recovery notification when work resumes after a quota reset.
 - [ ] Escape or format arbitrary Codex/task text safely for Telegram.
 - [ ] Implement delivery retries with backoff and idempotency/deduplication so a
-  restart does not spam duplicate reports.
+      restart does not spam duplicate reports.
 - [ ] Persist notification status and delivery errors without failing the underlying
-  completed task solely because Telegram is unavailable.
+      completed task solely because Telegram is unavailable.
 - [ ] Add optional read-only `/status` and `/queue` commands if they fit cleanly. Task
-  creation through Telegram remains out of scope.
+      creation through Telegram remains out of scope.
 - [ ] Add dashboard settings and a test-notification action.
 
 ### Acceptance criteria
@@ -565,31 +565,31 @@ and make normal installation, upgrading, backup, and troubleshooting manageable.
 
 - [ ] Produce deterministic production builds for backend, worker, and dashboard.
 - [ ] Choose and document a Windows service strategy that starts after login/boot,
-  restarts on crashes, uses a stable working directory, and runs without a visible
-  terminal window.
+      restarts on crashes, uses a stable working directory, and runs without a visible
+      terminal window.
 - [ ] Serve the production dashboard from the local backend and bind to loopback by
-  default.
+      default.
 - [ ] Add first-run setup for database location, Codex health/authentication, project
-  registration, model tiers, Ollama, and Telegram.
+      registration, model tiers, Ollama, and Telegram.
 - [ ] Add readiness and health checks for the database, scheduler, Codex, App Server,
-  Ollama, Git, GitHub connectivity, and Telegram.
+      Ollama, Git, GitHub connectivity, and Telegram.
 - [ ] Implement controlled database migrations with a documented backup step.
 - [ ] Document backup and restore for the SQLite database and configuration, excluding
-  secrets unless the chosen secret store has its own recovery procedure.
+      secrets unless the chosen secret store has its own recovery procedure.
 - [ ] Add log rotation, retention limits, and an exportable diagnostic bundle that
-  redacts secrets.
+      redacts secrets.
 - [ ] Add graceful update/shutdown behavior so an active Codex task is not duplicated.
 - [ ] Verify recovery after process crash, service restart, PC reboot, network loss,
-  GitHub outage, Ollama outage, App Server reconnect, and quota reset.
+      GitHub outage, Ollama outage, App Server reconnect, and quota reset.
 - [ ] Review all process spawning, path handling, and Git arguments for injection and
-  Windows quoting problems.
+      Windows quoting problems.
 - [ ] Verify localhost access controls and protect state-changing endpoints against
-  cross-site request attacks from arbitrary browser pages.
+      cross-site request attacks from arbitrary browser pages.
 - [ ] Add database indexes and retention/cleanup policies for long-running use.
 - [ ] Add an operator guide covering install, start/stop, upgrades, common blocked
-  states, manual requeue, credential renewal, and uninstall.
+      states, manual requeue, credential renewal, and uninstall.
 - [ ] Run a full end-to-end test: create a dashboard task, classify it, pass quota
-  gating, execute Codex, commit, push, mark complete, and receive a Telegram report.
+      gating, execute Codex, commit, push, mark complete, and receive a Telegram report.
 
 ### Acceptance criteria
 
@@ -614,16 +614,21 @@ and make normal installation, upgrading, backup, and troubleshooting manageable.
 
 Update this section at the end of every phase.
 
-- **Current completed phase:** None
+- **Current completed phase:** Phase 1 — Foundation, database, projects, and task board
 - **Bootstrap state:** Complete; local `main` tracks `origin/main` on GitHub
-- **Next phase:** Phase 1 — Foundation, database, projects, and task board
-- **Last known good commit:** `4cf8691` (initial implementation plan; a later
-  bookkeeping commit records bootstrap completion)
-- **How to run:** Not yet implemented
-- **How to test:** Not yet implemented
-- **Database/schema version:** Not yet implemented
-- **Important active decisions:** See Locked product decisions above
-- **Known issues or limitations:** Implementation has not started
+- **Next phase:** Phase 2 — Persistent single-task scheduler and restart recovery
+- **Last known good commit:** `54ca6ac` (Phase 1 implementation; a following
+  bookkeeping commit records phase completion)
+- **How to run:** `npm install`, `npm run db:migrate`, then `npm run dev`; open
+  `http://127.0.0.1:4311`
+- **How to test:** `npm run format:check`, `npm run lint`, `npm run typecheck`,
+  `npm test`, and `npm run build`
+- **Database/schema version:** `0000_phase_one`
+- **Important active decisions:** npm workspaces split shared contracts, Fastify API,
+  and React dashboard; migrations are checked-in SQL applied automatically at API
+  startup; Phase 1 exposes no task-start or arbitrary status-transition route
+- **Known issues or limitations:** No worker runs until Phase 2. Production dashboard
+  serving and Windows service packaging remain intentionally deferred to Phase 8.
 
 ## Phase Completion Log
 
@@ -639,4 +644,24 @@ Summary:
 Verification performed:
 Important decisions:
 Known limitations / follow-up:
+```
+
+### Phase 1
+
+```text
+Phase: 1 — Foundation, database, projects, and task board
+Completed on: 2026-09-09
+Commit SHA: 54ca6ac
+Summary: Added the TypeScript workspace, shared Zod contracts, Fastify API,
+  SQLite/Drizzle schema and migration, project/task/settings operations, React/Vite
+  dashboard, developer documentation, and automated coverage.
+Verification performed: Prettier check; ESLint; TypeScript checks; 9 unit/integration
+  tests; production build; fresh migration; production health/version probes; npm
+  audit; manual dashboard project/task/edit/priority/pause exercise; backend restart
+  with project, task, and pause-state persistence confirmed.
+Important decisions: SQLite defaults to ignored data/phantom.db; project validation
+  uses read-only git rev-parse; task creation always forces queued and Phase 1 has no
+  execution transition; queue ordering is priority then creation time.
+Known limitations / follow-up: Phase 2 must add the persistent scheduler, explicit
+  transition rules/history, global lease, worker health, and restart recovery.
 ```
