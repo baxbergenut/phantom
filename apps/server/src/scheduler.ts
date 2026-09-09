@@ -53,6 +53,8 @@ interface QueuedTaskRow {
   projectId: string;
   projectName: string;
   projectPath: string;
+  remoteName: string;
+  remoteBranch: string;
   priority: TaskPriority;
   attemptCount: number;
 }
@@ -64,6 +66,8 @@ interface RecoveringRow extends QueuedTaskRow {
   recoveryMetadata: string | null;
   codexThreadId: string | null;
   retryCount: number;
+  startingHead: string | null;
+  startingRemoteSha: string | null;
 }
 
 interface ActiveExecutionRow {
@@ -347,8 +351,11 @@ export class Scheduler {
             `SELECT e.id AS executionId, e.attempt_number AS attemptNumber,
                     e.recovery_count AS recoveryCount, e.recovery_metadata AS recoveryMetadata,
                     e.codex_thread_id AS codexThreadId, e.retry_count AS retryCount,
+                    e.starting_head AS startingHead,
+                    e.starting_remote_sha AS startingRemoteSha,
                     t.id, t.title, t.instructions, t.project_id AS projectId,
                     p.name AS projectName, p.local_path AS projectPath,
+                    p.remote_name AS remoteName, p.remote_branch AS remoteBranch,
                     t.priority, t.attempt_count AS attemptCount
              FROM executions e
              JOIN tasks t ON t.id = e.task_id
@@ -428,6 +435,8 @@ export class Scheduler {
           recoveryCount: 0,
           codexThreadId: null,
           retryCount: 0,
+          startingHead: null,
+          startingRemoteSha: null,
           correlationId: executionId,
         };
         this.logger.info(this.logContext(work), 'Queued task acquired.');
@@ -447,6 +456,7 @@ export class Scheduler {
         reportEvent: (kind, message, metadata) =>
           this.reportExecutionEvent(work, kind, message, metadata),
         beginRetry: (reason) => this.beginRetry(work, reason),
+        recordGitState: (state) => this.recordGitState(work, state),
       });
       if (this.stopping) return;
       this.reportExecutionEvent(
@@ -477,7 +487,7 @@ export class Scheduler {
 
   private finishExecution(
     work: WorkRow,
-    result: 'completed' | 'failed' | 'waiting_quota',
+    result: 'completed' | 'failed' | 'blocked' | 'waiting_quota',
     reason = result === 'completed' ? 'Codex completed successfully.' : 'Execution failed.',
     details?: {
       finalResult?: unknown | undefined;
@@ -559,6 +569,7 @@ export class Scheduler {
       .prepare(
         `SELECT t.id, t.title, t.instructions, t.project_id AS projectId,
                 p.name AS projectName, p.local_path AS projectPath,
+                p.remote_name AS remoteName, p.remote_branch AS remoteBranch,
                 t.priority, t.attempt_count AS attemptCount
          FROM tasks t JOIN projects p ON p.id = t.project_id
          WHERE t.status = 'queued' AND p.enabled = true
@@ -596,6 +607,41 @@ export class Scheduler {
          WHERE id = ? AND state = 'running' AND worker_id = ?`,
       )
       .run(threadId, this.now().toISOString(), work.executionId, this.workerId);
+  }
+
+  private recordGitState(
+    work: WorkRow,
+    state: {
+      startingHead?: string;
+      startingRemoteSha?: string;
+      endingHead?: string;
+      endingRemoteSha?: string;
+      changedFiles?: Array<{ status: string; path: string }>;
+      commitMetadata?: Record<string, string> | null;
+    },
+  ): void {
+    this.database.sqlite
+      .prepare(
+        `UPDATE executions SET
+           starting_head = COALESCE(?, starting_head),
+           starting_remote_sha = COALESCE(?, starting_remote_sha),
+           ending_head = COALESCE(?, ending_head),
+           ending_remote_sha = COALESCE(?, ending_remote_sha),
+           changed_files = COALESCE(?, changed_files),
+           commit_metadata = COALESCE(?, commit_metadata), updated_at = ?
+         WHERE id = ? AND state = 'running' AND worker_id = ?`,
+      )
+      .run(
+        state.startingHead ?? null,
+        state.startingRemoteSha ?? null,
+        state.endingHead ?? null,
+        state.endingRemoteSha ?? null,
+        state.changedFiles ? JSON.stringify(state.changedFiles) : null,
+        state.commitMetadata ? JSON.stringify(state.commitMetadata) : null,
+        this.now().toISOString(),
+        work.executionId,
+        this.workerId,
+      );
   }
 
   private reportExecutionEvent(

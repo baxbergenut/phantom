@@ -179,9 +179,25 @@ describe('persistent scheduler', () => {
     const executor: TaskExecutor = {
       async execute(context) {
         context.setThreadId('0199-persisted-thread');
+        context.recordGitState({
+          startingHead: '1111111',
+          startingRemoteSha: '1111111',
+        });
         context.reportEvent('progress', 'Inspecting files.');
         context.beginRetry('The first result was malformed.');
         context.reportEvent('usage', 'Retry completed.', { inputTokens: 10, outputTokens: 5 });
+        context.recordGitState({
+          endingHead: '2222222',
+          endingRemoteSha: '2222222',
+          changedFiles: [{ status: 'M', path: 'src/app.ts' }],
+          commitMetadata: {
+            sha: '2222222',
+            subject: 'Implement task',
+            authorName: 'Test',
+            authorEmail: 'test@localhost',
+            authoredAt: '2026-01-01T00:00:00Z',
+          },
+        });
         return {
           status: 'completed',
           reason: finalResult.summary,
@@ -202,7 +218,9 @@ describe('persistent scheduler', () => {
     const execution = database.sqlite
       .prepare(
         `SELECT codex_thread_id AS codexThreadId, retry_count AS retryCount,
-                final_result AS finalResult, token_usage AS tokenUsage, raw_log_path AS rawLogPath
+                final_result AS finalResult, token_usage AS tokenUsage, raw_log_path AS rawLogPath,
+                starting_head AS startingHead, ending_remote_sha AS endingRemoteSha,
+                changed_files AS changedFiles
          FROM executions WHERE task_id = ?`,
       )
       .get('codex-task') as {
@@ -211,12 +229,18 @@ describe('persistent scheduler', () => {
       finalResult: string;
       tokenUsage: string;
       rawLogPath: string;
+      startingHead: string;
+      endingRemoteSha: string;
+      changedFiles: string;
     };
     expect(execution.codexThreadId).toBe('0199-persisted-thread');
     expect(execution.retryCount).toBe(1);
     expect(JSON.parse(execution.finalResult)).toEqual(finalResult);
     expect(JSON.parse(execution.tokenUsage)).toMatchObject({ outputTokens: 5 });
     expect(execution.rawLogPath).toContain('execution.jsonl');
+    expect(execution.startingHead).toBe('1111111');
+    expect(execution.endingRemoteSha).toBe('2222222');
+    expect(JSON.parse(execution.changedFiles)).toEqual([{ status: 'M', path: 'src/app.ts' }]);
     expect(
       (
         database.sqlite

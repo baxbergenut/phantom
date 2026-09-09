@@ -60,7 +60,7 @@ describe('Phase 2 API', () => {
     expect(health.json()).toMatchObject({ status: 'ok', database: 'connected' });
 
     const version = await app.inject({ method: 'GET', url: '/api/version' });
-    expect(version.json()).toEqual({ name: 'phantom', version: '0.1.0', phase: 3 });
+    expect(version.json()).toEqual({ name: 'phantom', version: '0.1.0', phase: 4 });
   });
 
   it('serves the built dashboard from the production server', async () => {

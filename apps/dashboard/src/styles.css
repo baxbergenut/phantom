@@ -336,6 +336,24 @@ dd {
   border-radius: 12px;
   background: var(--panel);
 }
+.direct-push-warning {
+  display: grid;
+  gap: 4px;
+  margin: -12px 0 24px;
+  padding: 14px 17px;
+  border: 1px solid #9a6a28;
+  border-radius: 12px;
+  background: #2a2114;
+  color: #f0c878;
+}
+.direct-push-warning span,
+.direct-push-copy {
+  color: #d8b46e;
+  font-size: 0.8rem;
+}
+.direct-push-copy {
+  margin: 10px 0 0;
+}
 .worker-summary > div {
   display: flex;
   flex-direction: column;

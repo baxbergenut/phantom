@@ -1,8 +1,8 @@
 # Phantom
 
 Phantom is a local, single-user dashboard for managing Codex tasks across local Git
-repositories. Phase 3 runs queued work through the local Codex CLI, persists live
-activity and structured results, and safely resumes the same thread for one retry.
+repositories. Phase 4 adds guarded Git synchronization, Codex commits and direct
+pushes, and independent verification that completed work reached the configured branch.
 
 ## Requirements
 
@@ -48,7 +48,7 @@ The checked-in `.env.example` documents available settings. This checkout also h
 ignored local `.env` configured for `127.0.0.1:4310` and `data/phantom.db`. Windows
 service packaging remains intentionally deferred to Phase 8.
 
-## Phase 3 behavior
+## Phase 4 behavior
 
 - Project paths are resolved and validated with read-only Git commands.
 - Tasks are created in `queued` and the scheduler runs one task at a time.
@@ -66,9 +66,21 @@ service packaging remains intentionally deferred to Phase 8.
   both the API and dashboard.
 - Startup verifies the Codex executable, version output, authentication, JSONL events,
   output-schema support, and final-message support before accepting work.
-- Codex runs in the configured project directory with an explicit model, reasoning
-  effort, workspace-write sandbox, and no-interactive-approval policy. Phase 3 forbids
-  pushes; Git synchronization and direct push arrive in Phase 4.
+- Before Codex starts, Phantom requires a Git repository, clean worktree, configured
+  branch, present/reachable remote, and compatible local/remote history. Behind
+  branches synchronize by fast-forward only; unsafe states become `blocked` without
+  stashing, resetting, or discarding work.
+- Codex runs with explicit model/reasoning settings, `danger-full-access`, and no
+  interactive approvals. This is the minimum CLI sandbox that permits `.git` writes
+  and authenticated pushes, so enabled projects are intentionally high trust.
+- Codex must commit meaningful changes with an informative task-related message and
+  push normally to the configured branch. It is explicitly forbidden to force-push.
+- Phantom fetches after completion and independently verifies the claimed commit is
+  local HEAD and reachable from the configured remote branch. It records starting and
+  ending local/remote SHAs, changed files, and commit metadata.
+- A valid no-change task completes without an empty commit only when its result
+  explains why no commit was required. A rejected/unverified push receives the one
+  allowed same-thread retry with the exact failure context.
 - Executions store the Codex thread ID, concise live events, aggregate per-turn token
   usage, and a validated versioned final result. Invalid or missing structured output
   fails the attempt.

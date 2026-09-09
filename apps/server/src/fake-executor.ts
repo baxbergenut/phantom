@@ -7,11 +7,15 @@ export interface ExecutorTask {
   projectId: string;
   projectName: string;
   projectPath: string;
+  remoteName: string;
+  remoteBranch: string;
   executionId: string;
   attemptNumber: number;
   recoveryCount: number;
   codexThreadId: string | null;
   retryCount: number;
+  startingHead: string | null;
+  startingRemoteSha: string | null;
 }
 
 export interface ExecutorContext {
@@ -21,6 +25,14 @@ export interface ExecutorContext {
   setThreadId: (threadId: string) => void;
   reportEvent: (kind: CodexEventKind, message: string, metadata?: Record<string, unknown>) => void;
   beginRetry: (reason: string) => void;
+  recordGitState: (state: {
+    startingHead?: string;
+    startingRemoteSha?: string;
+    endingHead?: string;
+    endingRemoteSha?: string;
+    changedFiles?: Array<{ status: string; path: string }>;
+    commitMetadata?: Record<string, string> | null;
+  }) => void;
 }
 
 export type ExecutorResult =
@@ -32,7 +44,7 @@ export type ExecutorResult =
       rawLogPath?: string;
     }
   | {
-      status: 'failed' | 'waiting_quota';
+      status: 'failed' | 'blocked' | 'waiting_quota';
       reason: string;
       finalResult?: CodexFinalResult;
       tokenUsage?: TokenUsage;

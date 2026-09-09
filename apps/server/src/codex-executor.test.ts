@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { CodexExecutor, parseCodexEvent, redact } from './codex-executor.js';
 import type { ExecutorContext } from './fake-executor.js';
+import type { GitWorkflow } from './git-adapter.js';
 
 const fixtures = fileURLToPath(new URL('./test-fixtures', import.meta.url));
 
@@ -116,6 +117,56 @@ describe('Codex executor integration', () => {
     expect(readFileSync(result.rawLogPath!, 'utf8')).not.toContain('fixture-secret-value');
   });
 
+  it('blocks before launching Codex when Git preflight is unsafe', async () => {
+    const workflow: GitWorkflow = {
+      preflight: async () => {
+        throw new Error('Working tree is dirty.');
+      },
+      verifyCompletion: async () => {
+        throw new Error('unreachable');
+      },
+    };
+    const observed = context();
+    const result = await createExecutor(2_000, workflow).execute(observed.value);
+    expect(result).toMatchObject({
+      status: 'blocked',
+      finalResult: { failureReason: 'Working tree is dirty.' },
+    });
+    expect(observed.threadIds).toHaveLength(0);
+  });
+
+  it('uses the one same-thread retry when independent push verification fails', async () => {
+    process.env.PHANTOM_FAKE_CODEX_SCENARIO = 'success';
+    let verifications = 0;
+    const start = {
+      repositoryPath: root,
+      startingHead: '1111111',
+      startingRemoteSha: '1111111',
+    };
+    const workflow: GitWorkflow = {
+      preflight: async () => start,
+      verifyCompletion: async () => {
+        verifications += 1;
+        if (verifications === 1) {
+          throw new Error('Push was rejected because the remote advanced.');
+        }
+        return {
+          ...start,
+          endingHead: start.startingHead,
+          endingRemoteSha: start.startingRemoteSha,
+          changedFiles: [],
+          commitMetadata: null,
+        };
+      },
+    };
+    const observed = context();
+    const result = await createExecutor(2_000, workflow).execute(observed.value);
+    expect(result.status).toBe('completed');
+    expect(verifications).toBe(2);
+    expect(observed.retries).toEqual(['Push was rejected because the remote advanced.']);
+    expect(observed.threadIds).toEqual(['0199-fixture-thread']);
+  });
+
   it('terminates timed-out and cancelled child processes distinctly', async () => {
     process.env.PHANTOM_FAKE_CODEX_SCENARIO = 'timeout';
     const timedOut = await createExecutor(30).execute(context().value);
@@ -135,14 +186,17 @@ describe('Codex executor integration', () => {
     });
   });
 
-  function createExecutor(timeoutMs: number) {
-    return new CodexExecutor({
-      executable: process.execPath,
-      executableArgs: [path.join(fixtures, 'fake-codex.cjs')],
-      timeoutMs,
-      logDirectory: path.join(root, 'logs'),
-      model: 'fixture-model',
-    });
+  function createExecutor(timeoutMs: number, gitWorkflow?: GitWorkflow) {
+    return new CodexExecutor(
+      {
+        executable: process.execPath,
+        executableArgs: [path.join(fixtures, 'fake-codex.cjs')],
+        timeoutMs,
+        logDirectory: path.join(root, 'logs'),
+        model: 'fixture-model',
+      },
+      gitWorkflow,
+    );
   }
 
   function context(signal = new AbortController().signal) {
@@ -150,6 +204,7 @@ describe('Codex executor integration', () => {
     const kinds: CodexEventKind[] = [];
     const retries: string[] = [];
     const messages: string[] = [];
+    const gitStates: Array<Record<string, unknown>> = [];
     const value: ExecutorContext = {
       task: {
         id: 'task-1',
@@ -158,11 +213,15 @@ describe('Codex executor integration', () => {
         projectId: 'project-1',
         projectName: 'Fixture',
         projectPath: root,
+        remoteName: 'origin',
+        remoteBranch: 'main',
         executionId: 'execution-1',
         attemptNumber: 1,
         recoveryCount: 0,
         codexThreadId: null,
         retryCount: 0,
+        startingHead: null,
+        startingRemoteSha: null,
       },
       signal,
       heartbeat: () => undefined,
@@ -172,7 +231,8 @@ describe('Codex executor integration', () => {
         messages.push(message);
       },
       beginRetry: (reason) => retries.push(reason),
+      recordGitState: (state) => gitStates.push(state),
     };
-    return { value, threadIds, kinds, retries, messages };
+    return { value, threadIds, kinds, retries, messages, gitStates };
   }
 });

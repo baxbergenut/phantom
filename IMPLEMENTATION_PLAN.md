@@ -98,7 +98,7 @@ boundaries or locked decisions must be recorded in this file.
 - [x] Phase 1 — Foundation, database, projects, and task board
 - [x] Phase 2 — Persistent single-task scheduler and restart recovery
 - [x] Phase 3 — Codex execution, structured results, and same-thread retries
-- [ ] Phase 4 — Git synchronization, commit verification, and direct push
+- [x] Phase 4 — Git synchronization, commit verification, and direct push
 - [ ] Phase 5 — Live quota integration and reset-aware scheduling
 - [ ] Phase 6 — Local complexity classifier and model selection policy
 - [ ] Phase 7 — Telegram reporting
@@ -318,7 +318,7 @@ machine-readable progress and require a structured final answer.
 
 ## Phase 4 — Git synchronization, commit verification, and direct push
 
-**Status:** Planned
+**Status:** Complete
 
 **Prerequisite:** Phase 3
 
@@ -329,30 +329,30 @@ work to GitHub, while refusing unsafe repository states.
 
 ### Required work
 
-- [ ] Implement a Git adapter using argument arrays rather than shell-built command
+- [x] Implement a Git adapter using argument arrays rather than shell-built command
       strings.
-- [ ] Resolve and validate the configured repository path before every operation.
-- [ ] Add preflight checks for: Git repository, clean working tree, configured branch
+- [x] Resolve and validate the configured repository path before every operation.
+- [x] Add preflight checks for: Git repository, clean working tree, configured branch
       checked out, configured remote present, and reachable remote.
-- [ ] Fetch the remote and require local HEAD to be compatible with the remote branch.
-- [ ] Synchronize before execution using fast-forward-only behavior.
-- [ ] If the working tree is dirty, the branch is wrong, or history has diverged,
+- [x] Fetch the remote and require local HEAD to be compatible with the remote branch.
+- [x] Synchronize before execution using fast-forward-only behavior.
+- [x] If the working tree is dirty, the branch is wrong, or history has diverged,
       move the task to `blocked` with a precise reason. Never discard or stash changes
       automatically.
-- [ ] Persist starting HEAD, starting remote SHA, ending HEAD, and ending remote SHA.
-- [ ] Add explicit Git instructions to the Codex task contract: implement the task,
+- [x] Persist starting HEAD, starting remote SHA, ending HEAD, and ending remote SHA.
+- [x] Add explicit Git instructions to the Codex task contract: implement the task,
       commit meaningful changes, and push to the configured branch without force.
-- [ ] Ensure Codex uses an informative commit message related to the task.
-- [ ] Handle tasks that correctly produce no changes; require Codex to say why no
+- [x] Ensure Codex uses an informative commit message related to the task.
+- [x] Handle tasks that correctly produce no changes; require Codex to say why no
       commit was necessary.
-- [ ] After Codex reports completion, fetch the remote and independently verify that
+- [x] After Codex reports completion, fetch the remote and independently verify that
       the claimed commit is reachable from the configured remote branch.
-- [ ] A completion that required changes must not be marked complete until remote
+- [x] A completion that required changes must not be marked complete until remote
       verification succeeds.
-- [ ] If push is rejected because the remote advanced, resume the same Codex thread
+- [x] If push is rejected because the remote advanced, resume the same Codex thread
       once with the exact Git failure. Never automatically force-push.
-- [ ] Record changed-file summaries and commit metadata for reports.
-- [ ] Add prominent dashboard warnings explaining that enabled projects allow direct
+- [x] Record changed-file summaries and commit metadata for reports.
+- [x] Add prominent dashboard warnings explaining that enabled projects allow direct
       automated pushes to the configured branch.
 
 ### Acceptance criteria

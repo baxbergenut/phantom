@@ -281,6 +281,11 @@ function ProjectsView({
               </div>
               <h2>{project.name}</h2>
               <code>{project.localPath}</code>
+              {project.enabled && (
+                <p className="direct-push-copy">
+                  Direct push enabled to {project.remoteName}/{project.remoteBranch}
+                </p>
+              )}
               <dl>
                 <div>
                   <dt>Remote</dt>
@@ -341,6 +346,15 @@ function BoardView({
           + New task
         </button>
       </div>
+      {projects.some((project) => project.enabled) && (
+        <div className="direct-push-warning" role="note">
+          <strong>Direct automated pushes are enabled</strong>
+          <span>
+            Phantom may commit and push completed task changes to each enabled project's configured
+            branch without approval.
+          </span>
+        </div>
+      )}
       {worker && <WorkerSummary worker={worker} onCancel={onCancel} />}
       {tasks.length === 0 ? (
         <EmptyState
@@ -573,7 +587,7 @@ function ProjectForm({
             checked={form.enabled}
             onChange={(event) => setForm({ ...form, enabled: event.target.checked })}
           />{' '}
-          Enabled for future task execution
+          Enabled: allow Phantom to commit and push directly to this configured branch
         </label>
         <div className="form-actions">
           <button type="button" onClick={onClose}>
@@ -793,6 +807,27 @@ function TaskDetails({
                         <strong>Final result: {execution.finalResult.status}</strong>
                         {execution.finalResult.summary}
                       </div>
+                    )}
+                    {(execution.startingHead || execution.endingHead) && (
+                      <small>
+                        Git {execution.startingHead?.slice(0, 12) ?? 'unknown'} →{' '}
+                        {execution.endingHead?.slice(0, 12) ?? 'unknown'} · remote{' '}
+                        {execution.endingRemoteSha?.slice(0, 12) ?? 'unknown'}
+                      </small>
+                    )}
+                    {execution.commitMetadata && (
+                      <small>
+                        Commit {execution.commitMetadata.sha.slice(0, 12)} —{' '}
+                        {execution.commitMetadata.subject}
+                      </small>
+                    )}
+                    {execution.changedFiles && execution.changedFiles.length > 0 && (
+                      <small>
+                        Changed files:{' '}
+                        {execution.changedFiles
+                          .map((file) => `${file.status} ${file.path}`)
+                          .join(', ')}
+                      </small>
                     )}
                   </div>
                 ))}

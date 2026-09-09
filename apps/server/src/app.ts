@@ -92,7 +92,7 @@ export async function createApp(options: AppOptions = {}) {
     return { status: 'ok', database: 'connected', timestamp: new Date().toISOString() };
   });
 
-  app.get('/api/version', () => ({ name: 'phantom', version: '0.1.0', phase: 3 }));
+  app.get('/api/version', () => ({ name: 'phantom', version: '0.1.0', phase: 4 }));
 
   app.get('/api/projects', () =>
     database.db.select().from(projects).orderBy(asc(projects.name)).all(),

@@ -11,6 +11,7 @@ import {
 } from '@phantom/shared';
 
 import type { ExecutorContext, ExecutorResult, TaskExecutor } from './fake-executor.js';
+import { GitSafetyError, type GitStartState, type GitWorkflow } from './git-adapter.js';
 
 const finalSchemaPath = fileURLToPath(
   new URL('../codex-final-result.schema.json', import.meta.url),
@@ -21,7 +22,7 @@ export interface CodexExecutorConfig {
   executableArgs: string[];
   model: string;
   reasoningEffort: 'low' | 'medium' | 'high' | 'xhigh';
-  sandbox: 'read-only' | 'workspace-write';
+  sandbox: 'read-only' | 'workspace-write' | 'danger-full-access';
   timeoutMs: number;
   logDirectory: string;
   logRetentionDays: number;
@@ -33,7 +34,7 @@ export const defaultCodexExecutorConfig: CodexExecutorConfig = {
   executableArgs: [],
   model: 'gpt-5.6-sol',
   reasoningEffort: 'high',
-  sandbox: 'workspace-write',
+  sandbox: 'danger-full-access',
   timeoutMs: 60 * 60 * 1_000,
   logDirectory: path.resolve('data', 'execution-logs'),
   logRetentionDays: 14,
@@ -54,7 +55,10 @@ export class CodexCapabilityError extends Error {}
 export class CodexExecutor implements TaskExecutor {
   readonly config: CodexExecutorConfig;
 
-  constructor(config: Partial<CodexExecutorConfig> = {}) {
+  constructor(
+    config: Partial<CodexExecutorConfig> = {},
+    private readonly gitAdapter?: GitWorkflow,
+  ) {
     this.config = { ...defaultCodexExecutorConfig, ...config };
   }
 
@@ -95,6 +99,36 @@ export class CodexExecutor implements TaskExecutor {
     let threadId: string | null = context.task.codexThreadId;
     let usage = emptyUsage();
     let firstFailure = '';
+    let gitStart: GitStartState | null = null;
+
+    if (this.gitAdapter) {
+      try {
+        gitStart =
+          context.task.recoveryCount > 0 &&
+          context.task.startingHead &&
+          context.task.startingRemoteSha
+            ? {
+                repositoryPath: context.task.projectPath,
+                startingHead: context.task.startingHead,
+                startingRemoteSha: context.task.startingRemoteSha,
+              }
+            : await this.gitAdapter.preflight(gitProject(context));
+        context.recordGitState(gitStart);
+        context.reportEvent('progress', 'Git preflight and fast-forward synchronization passed.', {
+          startingHead: gitStart.startingHead,
+          startingRemoteSha: gitStart.startingRemoteSha,
+        });
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : 'Git preflight failed.';
+        return failureResult(
+          'blocked',
+          syntheticFailure('environment', reason),
+          usage,
+          rawLogPath,
+          reason,
+        );
+      }
+    }
 
     const resumedAfterRecovery = threadId
       ? {
@@ -102,7 +136,9 @@ export class CodexExecutor implements TaskExecutor {
           prompt: [
             'The Phantom worker restarted while the original task was in progress.',
             'Resume the original task from the current repository state, verify the work, and return a valid result matching the supplied schema.',
-            'Do not push changes; Phase 4 will add push authorization.',
+            this.gitAdapter
+              ? `Commit meaningful changes with an informative message and push normally to ${context.task.remoteName}/${context.task.remoteBranch}. Never force-push.`
+              : 'Do not push changes; Phase 4 will add push authorization.',
           ].join('\n\n'),
         }
       : null;
@@ -130,10 +166,12 @@ export class CodexExecutor implements TaskExecutor {
       );
     }
     if (firstResult?.status === 'completed' && first.code === 0) {
-      return successResult(firstResult, usage, rawLogPath);
+      const verificationFailure = await this.verifyGit(context, gitStart, firstResult);
+      if (!verificationFailure) return successResult(firstResult, usage, rawLogPath);
+      firstFailure = verificationFailure;
+    } else {
+      firstFailure = describeFailure(first, firstResult);
     }
-
-    firstFailure = describeFailure(first, firstResult);
     if (context.signal.aborted || first.timedOut) {
       const category = first.timedOut ? 'timeout' : 'cancelled';
       return failureResult(
@@ -159,7 +197,11 @@ export class CodexExecutor implements TaskExecutor {
       'The previous turn did not produce a successful Phantom result.',
       `Failure context: ${firstFailure}`,
       'Fix the issue if possible, finish the original task, and return a valid result matching the supplied schema.',
-      'Do not push changes; Phase 4 will add push authorization.',
+      ...(this.gitAdapter
+        ? [
+            `Commit meaningful changes with an informative message and push normally to ${context.task.remoteName}/${context.task.remoteBranch}. Never force-push.`,
+          ]
+        : ['Do not push changes; Phase 4 will add push authorization.']),
     ].join('\n\n');
     const second = await this.runTurn(
       context,
@@ -182,7 +224,15 @@ export class CodexExecutor implements TaskExecutor {
       );
     }
     if (secondResult?.status === 'completed' && second.code === 0) {
-      return successResult(secondResult, usage, rawLogPath);
+      const verificationFailure = await this.verifyGit(context, gitStart, secondResult);
+      if (!verificationFailure) return successResult(secondResult, usage, rawLogPath);
+      return failureResult(
+        'failed',
+        syntheticFailure('environment', verificationFailure),
+        usage,
+        rawLogPath,
+        verificationFailure,
+      );
     }
     const reason = describeFailure(second, secondResult);
     const result =
@@ -192,6 +242,29 @@ export class CodexExecutor implements TaskExecutor {
         reason,
       );
     return failureResult('failed', result, usage, rawLogPath, reason);
+  }
+
+  private async verifyGit(
+    context: ExecutorContext,
+    start: GitStartState | null,
+    result: CodexFinalResult,
+  ): Promise<string | null> {
+    if (!this.gitAdapter || !start) return null;
+    try {
+      const end = await this.gitAdapter.verifyCompletion(gitProject(context), start, result);
+      context.recordGitState(end);
+      context.reportEvent('progress', 'Git completion and remote reachability verified.', {
+        endingHead: end.endingHead,
+        endingRemoteSha: end.endingRemoteSha,
+        changedFiles: end.changedFiles,
+      });
+      return null;
+    } catch (error) {
+      if (error instanceof GitSafetyError && error.state) {
+        context.recordGitState(error.state);
+      }
+      return error instanceof Error ? error.message : 'Git completion verification failed.';
+    }
   }
 
   private async runTurn(
@@ -241,7 +314,7 @@ export class CodexExecutor implements TaskExecutor {
           context.task.projectPath,
           '-',
         ];
-    const prompt = resume?.prompt ?? taskPrompt(context);
+    const prompt = resume?.prompt ?? taskPrompt(context, Boolean(this.gitAdapter));
     const secrets = knownSecrets();
     const log = await open(rawLogPath, 'a');
     let logWrites = Promise.resolve();
@@ -371,12 +444,14 @@ export function parseCodexEvent(line: string): ParsedCodexEvent | null {
   return { kind: 'progress', message: truncate(message) };
 }
 
-function taskPrompt(context: ExecutorContext): string {
+function taskPrompt(context: ExecutorContext, pushesEnabled: boolean): string {
   return [
     `Task: ${context.task.title}`,
     context.task.instructions,
     'Work only in the configured project directory. Implement and verify the task autonomously.',
-    'Do not push changes; Phase 4 will add push authorization.',
+    pushesEnabled
+      ? `Work directly on ${context.task.remoteBranch}. Commit meaningful changes with an informative task-related message, then push normally to ${context.task.remoteName}/${context.task.remoteBranch}. Never force-push. If no changes are required, do not create an empty commit and explain why in summary.`
+      : 'Do not push changes; Phase 4 will add push authorization.',
     'Your final response must match the supplied JSON Schema exactly.',
   ].join('\n\n');
 }
@@ -408,7 +483,7 @@ function successResult(
 }
 
 function failureResult(
-  status: 'failed' | 'waiting_quota',
+  status: 'failed' | 'blocked' | 'waiting_quota',
   finalResult: CodexFinalResult | null,
   tokenUsage: TokenUsage,
   rawLogPath: string,
@@ -599,4 +674,12 @@ function positiveInteger(value: string | undefined): number | undefined {
   if (!value) return undefined;
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function gitProject(context: ExecutorContext) {
+  return {
+    localPath: context.task.projectPath,
+    remoteName: context.task.remoteName,
+    remoteBranch: context.task.remoteBranch,
+  };
 }

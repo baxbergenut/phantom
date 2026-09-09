@@ -84,6 +84,20 @@ export const executions = sqliteTable(
     finalResult: text('final_result', { mode: 'json' }).$type<CodexFinalResult>(),
     tokenUsage: text('token_usage', { mode: 'json' }).$type<TokenUsage>(),
     rawLogPath: text('raw_log_path'),
+    startingHead: text('starting_head'),
+    startingRemoteSha: text('starting_remote_sha'),
+    endingHead: text('ending_head'),
+    endingRemoteSha: text('ending_remote_sha'),
+    changedFiles: text('changed_files', { mode: 'json' }).$type<
+      Array<{ status: string; path: string }>
+    >(),
+    commitMetadata: text('commit_metadata', { mode: 'json' }).$type<{
+      sha: string;
+      subject: string;
+      authorName: string;
+      authorEmail: string;
+      authoredAt: string;
+    }>(),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
   },

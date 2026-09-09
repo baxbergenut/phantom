@@ -200,6 +200,18 @@ export interface Execution {
   finalResult: CodexFinalResult | null;
   tokenUsage: TokenUsage | null;
   rawLogPath: string | null;
+  startingHead: string | null;
+  startingRemoteSha: string | null;
+  endingHead: string | null;
+  endingRemoteSha: string | null;
+  changedFiles: Array<{ status: string; path: string }> | null;
+  commitMetadata: {
+    sha: string;
+    subject: string;
+    authorName: string;
+    authorEmail: string;
+    authoredAt: string;
+  } | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -250,7 +262,7 @@ export interface HealthResponse {
 export interface VersionResponse {
   name: 'phantom';
   version: string;
-  phase: 3;
+  phase: 4;
 }
 
 export interface ApiError {
