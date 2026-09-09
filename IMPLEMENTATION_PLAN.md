@@ -96,7 +96,7 @@ boundaries or locked decisions must be recorded in this file.
 - [x] Bootstrap prerequisite — Phantom is initialized on `main`, with
       `https://github.com/baxbergenut/phantom.git` configured as `origin`.
 - [x] Phase 1 — Foundation, database, projects, and task board
-- [ ] Phase 2 — Persistent single-task scheduler and restart recovery
+- [x] Phase 2 — Persistent single-task scheduler and restart recovery
 - [ ] Phase 3 — Codex execution, structured results, and same-thread retries
 - [ ] Phase 4 — Git synchronization, commit verification, and direct push
 - [ ] Phase 5 — Live quota integration and reset-aware scheduling
@@ -202,7 +202,7 @@ managing projects and tasks. No Codex task should be launched in this phase.
 
 ## Phase 2 — Persistent single-task scheduler and restart recovery
 
-**Status:** Planned
+**Status:** Complete
 
 **Prerequisite:** Phase 1
 
@@ -214,28 +214,28 @@ Codex quota or modifying repositories.
 
 ### Required work
 
-- [ ] Add an `executions` model for task runs, including task ID, attempt number,
+- [x] Add an `executions` model for task runs, including task ID, attempt number,
       lifecycle state, timestamps, worker identity, heartbeat, and recovery metadata.
-- [ ] Add a durable event/history model so every task status transition has a
+- [x] Add a durable event/history model so every task status transition has a
       timestamp, previous state, new state, and reason.
-- [ ] Implement a scheduler tick, defaulting to every 60 seconds and configurable.
-- [ ] Select only enabled projects and queued tasks, ordered by priority and creation
+- [x] Implement a scheduler tick, defaulting to every 60 seconds and configurable.
+- [x] Select only enabled projects and queued tasks, ordered by priority and creation
       time.
-- [ ] Enforce a database-backed global lease so no second worker or duplicate timer
+- [x] Enforce a database-backed global lease so no second worker or duplicate timer
       can start another task.
-- [ ] Make acquisition and task transition atomic in SQLite.
-- [ ] Respect the durable global pause flag.
-- [ ] Add graceful shutdown behavior that stops taking work and records the state of
+- [x] Make acquisition and task transition atomic in SQLite.
+- [x] Respect the durable global pause flag.
+- [x] Add graceful shutdown behavior that stops taking work and records the state of
       any active execution.
-- [ ] Add worker heartbeats and stale-execution detection.
-- [ ] Define restart recovery rules. A stale fake execution should be recovered or
+- [x] Add worker heartbeats and stale-execution detection.
+- [x] Define restart recovery rules. A stale fake execution should be recovered or
       returned to a resumable state without creating a duplicate attempt.
-- [ ] Add a fake executor capable of success, delay, failure, and simulated crash so
+- [x] Add a fake executor capable of success, delay, failure, and simulated crash so
       scheduler behavior can be tested deterministically.
-- [ ] Expose worker health, last poll time, current task, next eligible task, and
+- [x] Expose worker health, last poll time, current task, next eligible task, and
       pause state through the API and dashboard.
-- [ ] Make task state transitions explicit and reject invalid transitions.
-- [ ] Record structured application logs with correlation IDs for task and execution.
+- [x] Make task state transitions explicit and reject invalid transitions.
+- [x] Record structured application logs with correlation IDs for task and execution.
 
 ### Acceptance criteria
 
@@ -614,20 +614,25 @@ and make normal installation, upgrading, backup, and troubleshooting manageable.
 
 Update this section at the end of every phase.
 
-- **Current completed phase:** Phase 1 — Foundation, database, projects, and task board
+- **Current completed phase:** Phase 2 — Persistent single-task scheduler and restart
+  recovery
 - **Bootstrap state:** Complete; local `main` tracks `origin/main` on GitHub
-- **Next phase:** Phase 2 — Persistent single-task scheduler and restart recovery
-- **Last known good commit:** `1bf6519` (one-command runnable Phase 1 application)
+- **Next phase:** Phase 3 — Codex execution, structured results, and same-thread retries
+- **Last known good commit:** `c2d8d40` (Phase 2 implementation; a following
+  bookkeeping commit records phase completion)
 - **How to run:** `npm install`, then `npm start`; open `http://127.0.0.1:4310`.
   For live-reload development, use `npm run dev` and open `http://127.0.0.1:4311`.
 - **How to test:** `npm run format:check`, `npm run lint`, `npm run typecheck`,
   `npm test`, and `npm run build`
-- **Database/schema version:** `0000_phase_one`
-- **Important active decisions:** npm workspaces split shared contracts, Fastify API,
-  and React dashboard; migrations are checked-in SQL applied automatically at API
-  startup; Phase 1 exposes no task-start or arbitrary status-transition route
-- **Known issues or limitations:** No worker runs until Phase 2. Windows service
-  packaging remains intentionally deferred to Phase 8.
+- **Database/schema version:** `0001_phase_two`
+- **Important active decisions:** The in-process worker uses an immediate SQLite
+  transaction plus a singleton durable lease for acquisition; stale and gracefully
+  interrupted fake runs resume the same execution row and attempt; fake behavior is
+  selected with instruction markers; all status changes use an explicit transition
+  service and durable event rows
+- **Known issues or limitations:** The Phase 2 executor is intentionally fake and does
+  not modify repositories. Codex execution, retry policy, and streamed progress begin
+  in Phase 3; Windows service packaging remains deferred to Phase 8.
 
 ## Phase Completion Log
 
@@ -663,4 +668,28 @@ Important decisions: SQLite defaults to ignored data/phantom.db; project validat
   execution transition; queue ordering is priority then creation time.
 Known limitations / follow-up: Phase 2 must add the persistent scheduler, explicit
   transition rules/history, global lease, worker health, and restart recovery.
+```
+
+### Phase 2
+
+```text
+Phase: 2 — Persistent single-task scheduler and restart recovery
+Completed on: 2026-09-09
+Commit SHA: c2d8d40
+Summary: Added execution, transition-history, and global-lease persistence; an atomic
+  single-task scheduler; heartbeats, stale detection, same-attempt restart recovery,
+  graceful shutdown, deterministic fake execution, structured correlation logging,
+  worker health/history APIs, and dashboard visibility for worker and run state.
+Verification performed: Prettier check; ESLint; strict TypeScript checks; 19
+  unit/integration tests covering ordering, overlapping workers/ticks, pause/resume,
+  invalid transitions, automatic processing after backend restart, stale-crash
+  recovery, and graceful-shutdown recovery; production build; fresh-database migration
+  audit; npm audit (0 vulnerabilities).
+Important decisions: One singleton SQLite lease protects global acquisition, backed by
+  a second fresh-execution check; acquisition, execution creation, task transition,
+  and history insertion are atomic. Recovery reuses the original execution ID and
+  attempt number, incrementing only recovery_count.
+Known limitations / follow-up: Execution is fake by design and supports instruction
+  markers for deterministic testing. Phase 3 replaces it behind the executor adapter
+  and adds Codex progress, cancellation, structured output, and same-thread retries.
 ```
