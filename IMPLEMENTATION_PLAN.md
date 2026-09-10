@@ -100,7 +100,7 @@ boundaries or locked decisions must be recorded in this file.
 - [x] Phase 3 — Codex execution, structured results, and same-thread retries
 - [x] Phase 4 — Git synchronization, commit verification, and direct push
 - [x] Phase 5 — Live quota integration and reset-aware scheduling
-- [ ] Phase 6 — Local complexity classifier and model selection policy
+- [x] Phase 6 — Local complexity classifier and model selection policy
 - [ ] Phase 7 — Telegram reporting
 - [ ] Phase 8 — Windows service packaging, hardening, and release readiness
 
@@ -438,7 +438,7 @@ resume quota-interrupted tasks after the relevant reset.
 
 ## Phase 6 — Local complexity classifier and model selection policy
 
-**Status:** Planned
+**Status:** Complete
 
 **Prerequisite:** Phase 5
 
@@ -449,33 +449,33 @@ Codex model tier, and improve usage estimates using execution history.
 
 ### Required work
 
-- [ ] Add Ollama connection settings and a startup/health check.
-- [ ] Select and document a small quantized 3–4B model suitable for CPU inference on
+- [x] Add Ollama connection settings and a startup/health check.
+- [x] Select and document a small quantized 3–4B model suitable for CPU inference on
       a Windows PC with 16 GB RAM and approximately 500 MB dedicated GPU memory.
-- [ ] Keep the Ollama model configurable and do not assume GPU acceleration.
-- [ ] Define a versioned structured classification schema containing: complexity,
+- [x] Keep the Ollama model configurable and do not assume GPU acceleration.
+- [x] Define a versioned structured classification schema containing: complexity,
       risk, confidence, rationale, model tier, reasoning level, estimated runtime class,
       estimated quota class, and human-attention flags.
-- [ ] Build the classifier prompt from task text and minimal project metadata. Do not
+- [x] Build the classifier prompt from task text and minimal project metadata. Do not
       expose stored secrets or unrelated repository content.
-- [ ] Add deterministic scoring for task size, keywords, acceptance criteria, and
+- [x] Add deterministic scoring for task size, keywords, acceptance criteria, and
       risky categories such as migrations, authentication, deployment, broad refactors,
       destructive operations, and dependency upgrades.
-- [ ] Let deterministic safety rules increase risk/tier even when the local model
+- [x] Let deterministic safety rules increase risk/tier even when the local model
       recommends a lower level.
-- [ ] Implement a deterministic-only fallback when Ollama is missing, slow, invalid,
+- [x] Implement a deterministic-only fallback when Ollama is missing, slow, invalid,
       or returns malformed output.
-- [ ] Define configurable model tiers rather than hardcoding product assumptions:
+- [x] Define configurable model tiers rather than hardcoding product assumptions:
       economy, standard, advanced, and premium.
-- [ ] Map each tier to a Codex model and reasoning effort in settings. Validate model
+- [x] Map each tier to a Codex model and reasoning effort in settings. Validate model
       availability before dispatch and define a fallback order.
-- [ ] Persist the chosen model, reasoning effort, rationale, classifier version, and
+- [x] Persist the chosen model, reasoning effort, rationale, classifier version, and
       whether fallback logic was used.
-- [ ] Use historical before/after quota deltas grouped by model and complexity to
+- [x] Use historical before/after quota deltas grouped by model and complexity to
       refine initial estimates conservatively once sufficient samples exist.
-- [ ] Prevent one unusual task from radically changing estimates; use minimum sample
+- [x] Prevent one unusual task from radically changing estimates; use minimum sample
       counts, bounds, and conservative percentiles.
-- [ ] Display the classification and model-selection explanation in the dashboard.
+- [x] Display the classification and model-selection explanation in the dashboard.
 
 ### Acceptance criteria
 
@@ -614,29 +614,28 @@ and make normal installation, upgrading, backup, and troubleshooting manageable.
 
 Update this section at the end of every phase.
 
-- **Current completed phase:** Phase 5 — Live quota integration and reset-aware
-  scheduling
+- **Current completed phase:** Phase 6 — Local complexity classifier and model
+  selection policy
 - **Bootstrap state:** Complete; local `main` tracks `origin/main` on GitHub
-- **Next phase:** Phase 6 — Local complexity classifier and model selection policy
-- **Last known good commit:** `013f265` (Phase 5 implementation; a following
+- **Next phase:** Phase 7 — Telegram reporting
+- **Last known good commit:** `57e8661` (Phase 6 implementation; a following
   bookkeeping commit records phase completion)
 - **How to run:** `npm install`, then `npm start`; open `http://127.0.0.1:4310`.
   For live-reload development, use `npm run dev` and open `http://127.0.0.1:4311`.
 - **How to test:** `npm run format:check`, `npm run lint`, `npm run typecheck`,
   `npm test`, and `npm run build`
-- **Database/schema version:** `0004_phase_five`
-- **Important active decisions:** Production uses a narrow stdio Codex App Server
-  quota provider. Every dispatch requires a fresh read containing short and weekly
-  windows. All returned buckets are persisted, duration identifies window kind, and
-  sparse notifications merge into the last complete response. Default reserves are
-  15% short and 10% weekly; tasks default to the configurable medium estimate until
-  Phase 6. Quota pauses retain the same execution and Codex thread, store a durable
-  reset time, release the global lease, and resume without increasing retry_count.
-  Before/after deltas accumulate across resumed segments. Startup also repairs Phase
-  3/4 columns skipped by their historical non-monotonic migration timestamps.
-- **Known issues or limitations:** All tasks use the medium quota estimate and the
-  fixed Phase 3 model/reasoning configuration until Phase 6 adds local classification,
-  configurable model tiers, availability fallback, and history-refined estimates.
+- **Database/schema version:** `0005_phase_six`
+- **Important active decisions:** Classification runs locally before quota reads and
+  never calls Codex. Qwen2.5-Coder 3B Q4 is the configurable default with CPU-only
+  inference; deterministic scoring is both the outage fallback and a non-downgrading
+  safety floor. Environment-configured economy/standard/advanced/premium tiers map to
+  live Codex models and reasoning efforts. Dispatch validates the signed-in model
+  catalog and falls only to equal-or-higher tiers. Historical quota estimates require
+  five completed executions for the same model and complexity, use the 75th
+  percentile, and remain bounded to 50–150% of baseline.
+- **Known issues or limitations:** Historical estimates intentionally remain at their
+  conservative baseline until five matching executions exist. Telegram reporting is
+  deferred to Phase 7.
 
 ## Phase Completion Log
 
@@ -786,4 +785,32 @@ Important decisions: Gate all returned short/weekly buckets and fail closed when
 Known limitations / follow-up: Phase 6 must replace the default medium estimate with
   Ollama plus deterministic classification, add configurable model tiers and
   availability fallback, and refine estimates conservatively from stored quota deltas.
+```
+
+### Phase 6
+
+```text
+Phase: 6 — Local complexity classifier and model selection policy
+Completed on: 2026-09-10
+Commit SHA: 57e8661
+Summary: Added a versioned Ollama classifier with minimal-data prompts, deterministic
+  safety floors and outage fallback; CPU-first Qwen2.5-Coder 3B settings and health;
+  configurable economy/standard/advanced/premium Codex tiers; live model/reasoning
+  validation with non-downgrading fallback; persisted classification and selection
+  provenance; model-and-complexity history estimates; and dashboard explanations.
+Verification performed: Current official OpenAI model guidance and Ollama model/schema
+  documentation review; installed Codex 0.153.4 live model/list check; installed Ollama
+  0.34.0 and the 1.9 GB qwen2.5-coder:3b Q4_K_M model; schema-valid 21.0-second
+  classification at 100% CPU with a 2.2 GB loaded footprint; Prettier; ESLint; strict
+  TypeScript checks; 58 tests covering size/risk fixtures, structured success,
+  unavailable/timeout/malformed fallbacks, deterministic overrides, model fallback,
+  history sample/bound logic, scheduler persistence, and prior behavior; production
+  build; live and temporary-database migration checks; npm audit (0 vulnerabilities).
+Important decisions: Local classification runs before quota reads and execution
+  creation. GPU layers default to zero. Safety signals may raise but never lower local
+  classifications, and model fallback may move only to an equal-or-higher tier.
+  Historical estimates use one conservative observation per completed execution,
+  require five matching model/complexity samples, and use bounded 75th-percentile data.
+Known limitations / follow-up: Estimates stay at baseline until five matching samples
+  accumulate. Phase 7 adds Telegram task, failure, blocked, and quota reporting.
 ```
