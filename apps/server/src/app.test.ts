@@ -60,10 +60,14 @@ describe('Phase 2 API', () => {
     expect(health.json()).toMatchObject({ status: 'ok', database: 'connected' });
 
     const version = await app.inject({ method: 'GET', url: '/api/version' });
-    expect(version.json()).toEqual({ name: 'phantom', version: '0.1.0', phase: 5 });
+    expect(version.json()).toEqual({ name: 'phantom', version: '0.1.0', phase: 6 });
 
     const quota = await app.inject({ method: 'GET', url: '/api/quota' });
     expect(quota.json()).toMatchObject({ snapshot: null, fresh: false, error: null });
+
+    const classifier = await app.inject({ method: 'GET', url: '/api/classifier/health' });
+    expect(classifier.statusCode).toBe(200);
+    expect(classifier.json()).toMatchObject({ available: true, model: 'deterministic-rules' });
   });
 
   it('serves the built dashboard from the production server', async () => {
@@ -250,12 +254,34 @@ describe('Phase 2 API', () => {
 
     app = await createApp({ databasePath, dashboardRoot: false, schedulerEnabled: false });
     expect((await app.inject({ method: 'GET', url: `/api/tasks/${taskId}` })).json()).toMatchObject(
-      { status: 'completed', attemptCount: 1 },
+      {
+        status: 'completed',
+        attemptCount: 1,
+        classifierVersion: 'phase6-v1',
+        classificationSource: 'deterministic',
+        modelTier: 'economy',
+        selectedModel: 'gpt-5.6-luna',
+        selectedReasoning: 'medium',
+        quotaEstimateSource: 'baseline',
+      },
     );
+    const executions = (
+      await app.inject({ method: 'GET', url: `/api/tasks/${taskId}/executions` })
+    ).json<Array<{ selectedModel: string; classifierVersion: string }>>();
+    expect(executions[0]).toMatchObject({
+      selectedModel: 'gpt-5.6-luna',
+      classifierVersion: 'phase6-v1',
+    });
     const history = (await app.inject({ method: 'GET', url: `/api/tasks/${taskId}/history` })).json<
       Array<{ newStatus: string }>
     >();
-    expect(history.map((event) => event.newStatus)).toEqual(['queued', 'running', 'completed']);
+    expect(history.map((event) => event.newStatus)).toEqual([
+      'queued',
+      'classifying',
+      'queued',
+      'running',
+      'completed',
+    ]);
   });
 });
 

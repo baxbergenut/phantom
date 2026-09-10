@@ -21,6 +21,24 @@ input.on('line', (line) => {
     });
     return;
   }
+  if (message.method === 'model/list') {
+    send({
+      id: message.id,
+      result: {
+        data: [
+          {
+            model: 'gpt-5.6-terra',
+            supportedReasoningEfforts: [
+              { reasoningEffort: 'medium', description: 'Medium' },
+              { reasoningEffort: 'high', description: 'High' },
+            ],
+          },
+        ],
+        nextCursor: null,
+      },
+    });
+    return;
+  }
   if (message.method !== 'account/rateLimits/read') return;
   if (mode === 'timeout') return;
   if (mode === 'reconnect' && marker && !existsSync(marker)) {

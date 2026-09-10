@@ -265,6 +265,26 @@ main {
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+.model-tier {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border: 1px solid #4f5b76;
+  border-radius: 99px;
+  padding: 0.2rem 0.5rem;
+  color: #c3c9ff;
+  background: #242943;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.model-tier.advanced,
+.model-tier.premium {
+  color: #ffd594;
+  border-color: #765d37;
+  background: #302719;
+}
 .badge.enabled {
   color: #76d79a;
   border-color: #315d43;
@@ -636,6 +656,60 @@ textarea {
   display: block;
   font-size: 0.75rem;
   margin-bottom: 5px;
+}
+.classification-panel {
+  display: grid;
+  gap: 11px;
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid #394564;
+  border-radius: 11px;
+  background: #141c2a;
+}
+.classification-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.classification-heading > div {
+  display: grid;
+  gap: 3px;
+}
+.classification-heading small,
+.classification-facts,
+.model-explanation,
+.fallback-note {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.classification-panel > p {
+  margin: 0;
+  line-height: 1.5;
+}
+.classification-facts,
+.attention-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.classification-facts span,
+.attention-flags span {
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: #202b3e;
+}
+.model-explanation {
+  display: grid;
+  gap: 4px;
+}
+.fallback-note {
+  color: #f0c878;
+}
+.attention-flags span {
+  color: #ffc67a;
+  background: #352819;
+  font-size: 0.7rem;
 }
 .history {
   margin-top: 24px;

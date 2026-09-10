@@ -8,6 +8,7 @@ import {
   type CodexEventKind,
   type CodexFinalResult,
   type TokenUsage,
+  type ReasoningLevel,
 } from '@phantom/shared';
 
 import type { ExecutorContext, ExecutorResult, TaskExecutor } from './fake-executor.js';
@@ -21,7 +22,7 @@ export interface CodexExecutorConfig {
   executable: string;
   executableArgs: string[];
   model: string;
-  reasoningEffort: 'low' | 'medium' | 'high' | 'xhigh';
+  reasoningEffort: ReasoningLevel;
   sandbox: 'read-only' | 'workspace-write' | 'danger-full-access';
   timeoutMs: number;
   logDirectory: string;
@@ -277,6 +278,8 @@ export class CodexExecutor implements TaskExecutor {
     observe: (event: ParsedCodexEvent) => void,
   ): Promise<ProcessResult> {
     await rm(lastMessagePath, { force: true });
+    const selectedModel = context.task.selectedModel ?? this.config.model;
+    const selectedReasoning = context.task.selectedReasoning ?? this.config.reasoningEffort;
     const args = resume
       ? [
           'exec',
@@ -287,9 +290,9 @@ export class CodexExecutor implements TaskExecutor {
           '--output-last-message',
           lastMessagePath,
           '--model',
-          this.config.model,
+          selectedModel,
           '-c',
-          `model_reasoning_effort="${this.config.reasoningEffort}"`,
+          `model_reasoning_effort="${selectedReasoning}"`,
           '-c',
           'approval_policy="never"',
           '-c',
@@ -305,11 +308,11 @@ export class CodexExecutor implements TaskExecutor {
           '--output-last-message',
           lastMessagePath,
           '--model',
-          this.config.model,
+          selectedModel,
           '--sandbox',
           this.config.sandbox,
           '-c',
-          `model_reasoning_effort="${this.config.reasoningEffort}"`,
+          `model_reasoning_effort="${selectedReasoning}"`,
           '-c',
           'approval_policy="never"',
           '--cd',
@@ -662,7 +665,9 @@ export function codexExecutorConfigFromEnvironment(
     ...(process.env.PHANTOM_CODEX_REASONING === 'low' ||
     process.env.PHANTOM_CODEX_REASONING === 'medium' ||
     process.env.PHANTOM_CODEX_REASONING === 'high' ||
-    process.env.PHANTOM_CODEX_REASONING === 'xhigh'
+    process.env.PHANTOM_CODEX_REASONING === 'xhigh' ||
+    process.env.PHANTOM_CODEX_REASONING === 'none' ||
+    process.env.PHANTOM_CODEX_REASONING === 'max'
       ? { reasoningEffort: process.env.PHANTOM_CODEX_REASONING }
       : {}),
     ...(positiveInteger(process.env.PHANTOM_CODEX_TIMEOUT_MS)

@@ -131,6 +131,7 @@ export function evaluateQuotaGate(
   complexity: ComplexityClass,
   config: QuotaPolicyConfig,
   now: Date,
+  estimatePercentOverride?: number | null,
 ): QuotaGateResult {
   if (!isQuotaSnapshotFresh(snapshot, now, config.freshnessMs)) {
     return blocked(
@@ -151,7 +152,14 @@ export function evaluateQuotaGate(
   }
 
   const usableShort = 100 - config.shortReservePercent;
-  const estimatedShort = (usableShort * config.estimatePercentByComplexity[complexity]) / 100;
+  const estimatePercent =
+    estimatePercentOverride !== null &&
+    estimatePercentOverride !== undefined &&
+    Number.isFinite(estimatePercentOverride) &&
+    estimatePercentOverride > 0
+      ? estimatePercentOverride
+      : config.estimatePercentByComplexity[complexity];
+  const estimatedShort = (usableShort * estimatePercent) / 100;
   const blockers: QuotaWindow[] = [];
   for (const window of short) {
     if (window.remainingPercent < config.shortReservePercent + estimatedShort)

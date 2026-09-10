@@ -4,15 +4,23 @@ import type Database from 'better-sqlite3';
 
 import type {
   CodexEventKind,
+  ClassifierHealth,
   ComplexityClass,
+  ModelTier,
   QuotaSnapshot,
   QuotaStatus,
   QuotaUsageDelta,
+  ReasoningLevel,
   TaskPriority,
   TaskStatus,
   WorkerHealth,
 } from '@phantom/shared';
 
+import {
+  DeterministicTaskClassifier,
+  type ClassificationResult,
+  type TaskClassifier,
+} from './classifier.js';
 import type { PhantomDatabase } from './db/index.js';
 import {
   FakeExecutor,
@@ -32,6 +40,16 @@ import {
   type QuotaPolicyConfig,
   type QuotaProvider,
 } from './quota-policy.js';
+import {
+  modelPolicyFromEnvironment,
+  refineQuotaEstimate,
+  resolveModelSelection,
+  StaticModelCatalogProvider,
+  type CodexModelInfo,
+  type ModelCatalogProvider,
+  type ModelPolicy,
+  type QuotaEstimate,
+} from './model-policy.js';
 
 const workerPausedKey = 'worker.paused';
 const leaseKey = 'global';
@@ -80,6 +98,18 @@ interface QueuedTaskRow {
   attemptCount: number;
   status: TaskStatus;
   complexity: ComplexityClass;
+  classification: string | null;
+  classifierVersion: string | null;
+  classificationSource: 'ollama' | 'deterministic' | null;
+  classifierFallbackUsed: number;
+  modelTier: ModelTier | null;
+  selectedModel: string | null;
+  selectedReasoning: ReasoningLevel | null;
+  modelFallbackUsed: number;
+  modelSelectionRationale: string | null;
+  quotaEstimatePercent: number | null;
+  quotaEstimateSource: 'baseline' | 'historical' | null;
+  quotaEstimateSampleCount: number;
   quotaWaitUntil: string | null;
 }
 
@@ -132,6 +162,9 @@ export class Scheduler {
       now?: () => Date;
       quotaProvider?: QuotaProvider;
       quotaPolicy?: Partial<QuotaPolicyConfig>;
+      classifier?: TaskClassifier;
+      modelCatalogProvider?: ModelCatalogProvider;
+      modelPolicy?: ModelPolicy;
     } = {},
   ) {
     this.workerId = options.workerId ?? `worker-${randomUUID()}`;
@@ -140,6 +173,10 @@ export class Scheduler {
     this.logger = options.logger ?? silentLogger;
     this.now = options.now ?? (() => new Date());
     this.quotaProvider = options.quotaProvider ?? new UnlimitedQuotaProvider(this.now);
+    this.classifier = options.classifier ?? new DeterministicTaskClassifier();
+    this.modelPolicy = options.modelPolicy ?? modelPolicyFromEnvironment();
+    this.modelCatalogProvider =
+      options.modelCatalogProvider ?? new StaticModelCatalogProvider(this.modelPolicy);
     const environmentQuotaPolicy = quotaPolicyConfigFromEnvironment();
     this.quotaPolicy = {
       ...defaultQuotaPolicyConfig,
@@ -164,6 +201,10 @@ export class Scheduler {
   private readonly now: () => Date;
   private readonly quotaProvider: QuotaProvider;
   private readonly quotaPolicy: QuotaPolicyConfig;
+  private readonly classifier: TaskClassifier;
+  private readonly modelCatalogProvider: ModelCatalogProvider;
+  private readonly modelPolicy: ModelPolicy;
+  private modelCatalogError: string | null = null;
 
   start(): void {
     if (this.timer || this.stopping) return;
@@ -180,9 +221,13 @@ export class Scheduler {
     this.tickInFlight = true;
     try {
       this.recoverStaleExecutions();
+      await this.classifyNextQueuedTask();
+      if (this.stopping) return false;
+      const models = await this.refreshModelCatalog();
+      if (!models) return false;
       const snapshot = await this.refreshQuota();
       if (this.stopping) return false;
-      const work = this.acquireWork(snapshot);
+      const work = this.acquireWork(snapshot, models);
       if (!work) return false;
       this.activeWork = work;
       this.abortController = new AbortController();
@@ -354,12 +399,32 @@ export class Scheduler {
     };
   }
 
+  checkClassifierHealth(): Promise<ClassifierHealth> {
+    return this.classifier.checkHealth();
+  }
+
   recoverStaleExecutions(): number {
     const now = this.now();
     const nowIso = now.toISOString();
     const staleBefore = new Date(now.getTime() - this.config.staleAfterMs).toISOString();
+    const classificationStaleBefore = new Date(
+      now.getTime() - Math.max(this.config.staleAfterMs, 2 * 60_000),
+    ).toISOString();
     return this.database.sqlite
       .transaction(() => {
+        const staleClassifications = this.database.sqlite
+          .prepare(`SELECT id FROM tasks WHERE status = 'classifying' AND updated_at <= ?`)
+          .all(classificationStaleBefore) as Array<{ id: string }>;
+        for (const task of staleClassifications) {
+          transitionTaskInTransaction(this.database.sqlite, {
+            taskId: task.id,
+            newStatus: 'queued',
+            expectedStatus: 'classifying',
+            reason: 'Stale local classification was recovered and requeued.',
+            statusReason: null,
+            now: nowIso,
+          });
+        }
         const stale = this.database.sqlite
           .prepare(
             `SELECT id, task_id AS taskId, worker_id AS workerId FROM executions
@@ -395,12 +460,133 @@ export class Scheduler {
             'Stale execution marked for recovery.',
           );
         }
-        return stale.length;
+        return stale.length + staleClassifications.length;
       })
       .immediate();
   }
 
-  private acquireWork(snapshot: QuotaSnapshot | null): WorkRow | null {
+  private async classifyNextQueuedTask(): Promise<boolean> {
+    const now = this.now().toISOString();
+    const task = this.database.sqlite
+      .transaction(() => {
+        const candidate = this.database.sqlite
+          .prepare(
+            `SELECT t.id, t.title, t.instructions, p.name AS projectName,
+                    p.remote_branch AS remoteBranch
+             FROM tasks t JOIN projects p ON p.id = t.project_id
+             WHERE t.status = 'queued' AND t.classifier_version IS NULL AND p.enabled = true
+             ORDER BY CASE t.priority
+               WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END,
+               t.created_at, t.id
+             LIMIT 1`,
+          )
+          .get() as
+          | {
+              id: string;
+              title: string;
+              instructions: string;
+              projectName: string;
+              remoteBranch: string;
+            }
+          | undefined;
+        if (!candidate) return undefined;
+        transitionTaskInTransaction(this.database.sqlite, {
+          taskId: candidate.id,
+          newStatus: 'classifying',
+          expectedStatus: 'queued',
+          reason: 'Local complexity classification started.',
+          now,
+        });
+        return candidate;
+      })
+      .immediate();
+    if (!task) return false;
+
+    let result: ClassificationResult;
+    try {
+      result = await this.classifier.classify(task);
+    } catch (error) {
+      const deterministic = await new DeterministicTaskClassifier().classify(task);
+      result = { ...deterministic, fallbackUsed: true };
+      this.logger.warn(
+        {
+          component: 'classifier',
+          taskId: task.id,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        'Classifier failed unexpectedly; deterministic fallback used.',
+      );
+    }
+    const completedAt = this.now().toISOString();
+    const classification = result.classification;
+    const baseline =
+      this.quotaPolicy.estimatePercentByComplexity[classification.estimatedQuotaClass];
+    this.database.sqlite
+      .transaction(() => {
+        const current = this.database.sqlite
+          .prepare('SELECT status FROM tasks WHERE id = ?')
+          .get(task.id) as { status: TaskStatus } | undefined;
+        if (current?.status !== 'classifying') return;
+        this.database.sqlite
+          .prepare(
+            `UPDATE tasks SET complexity = ?, classification = ?, classifier_version = ?,
+               classification_source = ?, classifier_fallback_used = ?, model_tier = ?,
+               selected_model = NULL, selected_reasoning = NULL, model_fallback_used = false,
+               model_selection_rationale = NULL, quota_estimate_percent = ?,
+               quota_estimate_source = 'baseline', quota_estimate_sample_count = 0,
+               updated_at = ? WHERE id = ?`,
+          )
+          .run(
+            classification.complexity,
+            JSON.stringify(classification),
+            result.classifierVersion,
+            result.source,
+            result.fallbackUsed ? 1 : 0,
+            classification.modelTier,
+            baseline,
+            completedAt,
+            task.id,
+          );
+        transitionTaskInTransaction(this.database.sqlite, {
+          taskId: task.id,
+          newStatus: 'queued',
+          expectedStatus: 'classifying',
+          reason: `Classified as ${classification.complexity.replace('_', ' ')} / ${classification.modelTier}.`,
+          statusReason: null,
+          now: completedAt,
+        });
+      })
+      .immediate();
+    return true;
+  }
+
+  private async refreshModelCatalog(): Promise<CodexModelInfo[] | null> {
+    try {
+      const models = await this.modelCatalogProvider.listModels();
+      if (!models.length) throw new Error('Codex returned no available models.');
+      this.modelCatalogError = null;
+      return models;
+    } catch (error) {
+      this.modelCatalogError = error instanceof Error ? error.message : String(error);
+      const now = this.now().toISOString();
+      const task = this.selectNextDispatchableTask();
+      if (task) {
+        this.database.sqlite
+          .prepare('UPDATE tasks SET status_reason = ?, updated_at = ? WHERE id = ?')
+          .run(`Model availability check failed: ${this.modelCatalogError}`, now, task.id);
+      }
+      this.logger.warn(
+        { component: 'model-policy', workerId: this.workerId, error: this.modelCatalogError },
+        'Codex model catalog unavailable; dispatch paused.',
+      );
+      return null;
+    }
+  }
+
+  private acquireWork(
+    snapshot: QuotaSnapshot | null,
+    availableModels: CodexModelInfo[],
+  ): WorkRow | null {
     const now = this.now();
     const nowIso = now.toISOString();
     const leaseExpiresAt = new Date(now.getTime() + this.config.leaseDurationMs).toISOString();
@@ -445,7 +631,19 @@ export class Scheduler {
                     p.name AS projectName, p.local_path AS projectPath,
                     p.remote_name AS remoteName, p.remote_branch AS remoteBranch,
                     t.priority, t.attempt_count AS attemptCount, t.status,
-                    t.complexity, t.quota_wait_until AS quotaWaitUntil
+                    COALESCE(e.complexity, t.complexity) AS complexity,
+                    t.classification, t.classifier_version AS classifierVersion,
+                    t.classification_source AS classificationSource,
+                    t.classifier_fallback_used AS classifierFallbackUsed,
+                    COALESCE(e.model_tier, t.model_tier) AS modelTier,
+                    COALESCE(e.selected_model, t.selected_model) AS selectedModel,
+                    COALESCE(e.selected_reasoning, t.selected_reasoning) AS selectedReasoning,
+                    COALESCE(e.model_fallback_used, t.model_fallback_used) AS modelFallbackUsed,
+                    COALESCE(e.model_selection_rationale, t.model_selection_rationale) AS modelSelectionRationale,
+                    COALESCE(e.quota_estimate_percent, t.quota_estimate_percent) AS quotaEstimatePercent,
+                    COALESCE(e.quota_estimate_source, t.quota_estimate_source) AS quotaEstimateSource,
+                    COALESCE(e.quota_estimate_sample_count, t.quota_estimate_sample_count) AS quotaEstimateSampleCount,
+                    t.quota_wait_until AS quotaWaitUntil
              FROM executions e
              JOIN tasks t ON t.id = e.task_id
              JOIN projects p ON p.id = t.project_id
@@ -455,8 +653,25 @@ export class Scheduler {
           )
           .get(nowIso) as RecoveringRow | undefined;
         if (recovering) {
+          const modelSelection = recovering.modelTier
+            ? resolveModelSelection(recovering.modelTier, availableModels, this.modelPolicy)
+            : null;
+          if (!modelSelection) {
+            this.logger.warn(
+              this.logContext({ ...recovering, correlationId: recovering.executionId }),
+              'No non-downgrading configured model is currently available for recovery.',
+            );
+            this.releaseLease(nowIso, false);
+            return null;
+          }
           const decision = snapshot
-            ? evaluateQuotaGate(snapshot, recovering.complexity, this.quotaPolicy, now)
+            ? evaluateQuotaGate(
+                snapshot,
+                recovering.complexity,
+                this.quotaPolicy,
+                now,
+                recovering.quotaEstimatePercent,
+              )
             : null;
           if (!snapshot || !decision?.allowed) {
             const reason =
@@ -484,10 +699,24 @@ export class Scheduler {
               `UPDATE executions SET state = 'running', worker_id = ?, heartbeat_at = ?,
                  recovery_count = recovery_count + 1, recovery_metadata = ?,
                  quota_before_snapshot_id = COALESCE(quota_before_snapshot_id, ?),
+                 model_tier = ?, selected_model = ?, selected_reasoning = ?,
+                 model_fallback_used = ?, model_selection_rationale = ?,
                  quota_wait_until = NULL, updated_at = ?
                WHERE id = ? AND state = 'recovering'`,
             )
-            .run(this.workerId, nowIso, metadata, snapshot.id, nowIso, recovering.executionId);
+            .run(
+              this.workerId,
+              nowIso,
+              metadata,
+              snapshot.id,
+              modelSelection.tier,
+              modelSelection.model,
+              modelSelection.reasoning,
+              modelSelection.fallbackUsed ? 1 : 0,
+              modelSelection.rationale,
+              nowIso,
+              recovering.executionId,
+            );
           if (recovering.status === 'waiting_quota') {
             transitionTaskInTransaction(sqlite, {
               taskId: recovering.id,
@@ -512,6 +741,11 @@ export class Scheduler {
           );
           return {
             ...recovering,
+            modelTier: modelSelection.tier,
+            selectedModel: modelSelection.model,
+            selectedReasoning: modelSelection.reasoning,
+            modelFallbackUsed: modelSelection.fallbackUsed ? 1 : 0,
+            modelSelectionRationale: modelSelection.rationale,
             correlationId,
             recoveryCount: recovering.recoveryCount + 1,
             resumeReason,
@@ -530,8 +764,66 @@ export class Scheduler {
           return null;
         }
 
+        if (!task.modelTier) {
+          this.releaseLease(nowIso, false);
+          return null;
+        }
+        const modelSelection = resolveModelSelection(
+          task.modelTier,
+          availableModels,
+          this.modelPolicy,
+        );
+        if (!modelSelection) {
+          sqlite
+            .prepare('UPDATE tasks SET status_reason = ?, updated_at = ? WHERE id = ?')
+            .run(
+              `No configured ${task.modelTier}-or-higher Codex model with the requested reasoning effort is available.`,
+              nowIso,
+              task.id,
+            );
+          this.releaseLease(nowIso, false);
+          return null;
+        }
+        const estimate = this.estimateQuotaFor(modelSelection.model, task.complexity);
+        sqlite
+          .prepare(
+            `UPDATE tasks SET model_tier = ?, selected_model = ?, selected_reasoning = ?,
+               model_fallback_used = ?, model_selection_rationale = ?, quota_estimate_percent = ?,
+               quota_estimate_source = ?, quota_estimate_sample_count = ?, updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(
+            modelSelection.tier,
+            modelSelection.model,
+            modelSelection.reasoning,
+            modelSelection.fallbackUsed ? 1 : 0,
+            modelSelection.rationale,
+            estimate.percent,
+            estimate.source,
+            estimate.sampleCount,
+            nowIso,
+            task.id,
+          );
+        const dispatchTask: QueuedTaskRow = {
+          ...task,
+          modelTier: modelSelection.tier,
+          selectedModel: modelSelection.model,
+          selectedReasoning: modelSelection.reasoning,
+          modelFallbackUsed: modelSelection.fallbackUsed ? 1 : 0,
+          modelSelectionRationale: modelSelection.rationale,
+          quotaEstimatePercent: estimate.percent,
+          quotaEstimateSource: estimate.source,
+          quotaEstimateSampleCount: estimate.sampleCount,
+        };
+
         const decision = snapshot
-          ? evaluateQuotaGate(snapshot, task.complexity, this.quotaPolicy, now)
+          ? evaluateQuotaGate(
+              snapshot,
+              dispatchTask.complexity,
+              this.quotaPolicy,
+              now,
+              dispatchTask.quotaEstimatePercent,
+            )
           : null;
         if (!snapshot || !decision?.allowed) {
           const reason =
@@ -540,7 +832,7 @@ export class Scheduler {
           const waitUntil =
             decision?.waitUntil ??
             new Date(now.getTime() + this.quotaPolicy.providerRetryDelayMs).toISOString();
-          this.deferTaskBeforeExecution(task, reason, waitUntil, nowIso);
+          this.deferTaskBeforeExecution(dispatchTask, reason, waitUntil, nowIso);
           this.releaseLease(nowIso, false);
           return null;
         }
@@ -551,8 +843,12 @@ export class Scheduler {
           .prepare(
             `INSERT INTO executions
               (id, task_id, attempt_number, state, worker_id, started_at, heartbeat_at,
-               recovery_count, quota_before_snapshot_id, created_at, updated_at)
-             VALUES (?, ?, ?, 'running', ?, ?, ?, 0, ?, ?, ?)`,
+               recovery_count, quota_before_snapshot_id, complexity, model_tier, selected_model,
+               selected_reasoning, model_fallback_used, classifier_version,
+               classifier_fallback_used, classification, model_selection_rationale,
+               quota_estimate_percent, quota_estimate_source, quota_estimate_sample_count,
+               created_at, updated_at)
+             VALUES (?, ?, ?, 'running', ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             executionId,
@@ -562,6 +858,18 @@ export class Scheduler {
             nowIso,
             nowIso,
             snapshot.id,
+            dispatchTask.complexity,
+            dispatchTask.modelTier,
+            dispatchTask.selectedModel,
+            dispatchTask.selectedReasoning,
+            dispatchTask.modelFallbackUsed,
+            dispatchTask.classifierVersion,
+            dispatchTask.classifierFallbackUsed,
+            dispatchTask.classification,
+            dispatchTask.modelSelectionRationale,
+            dispatchTask.quotaEstimatePercent,
+            dispatchTask.quotaEstimateSource,
+            dispatchTask.quotaEstimateSampleCount,
             nowIso,
             nowIso,
           );
@@ -582,7 +890,7 @@ export class Scheduler {
         });
         this.claimLease(executionId, nowIso, leaseExpiresAt);
         const work = {
-          ...task,
+          ...dispatchTask,
           executionId,
           attemptNumber,
           recoveryCount: 0,
@@ -744,9 +1052,21 @@ export class Scheduler {
                 p.name AS projectName, p.local_path AS projectPath,
                 p.remote_name AS remoteName, p.remote_branch AS remoteBranch,
                 t.priority, t.attempt_count AS attemptCount, t.status,
-                t.complexity, t.quota_wait_until AS quotaWaitUntil
+                t.complexity, t.classification,
+                t.classifier_version AS classifierVersion,
+                t.classification_source AS classificationSource,
+                t.classifier_fallback_used AS classifierFallbackUsed,
+                t.model_tier AS modelTier, t.selected_model AS selectedModel,
+                t.selected_reasoning AS selectedReasoning,
+                t.model_fallback_used AS modelFallbackUsed,
+                t.model_selection_rationale AS modelSelectionRationale,
+                t.quota_estimate_percent AS quotaEstimatePercent,
+                t.quota_estimate_source AS quotaEstimateSource,
+                t.quota_estimate_sample_count AS quotaEstimateSampleCount,
+                t.quota_wait_until AS quotaWaitUntil
          FROM tasks t JOIN projects p ON p.id = t.project_id
          WHERE t.status IN ('queued', 'waiting_quota') AND p.enabled = true
+           AND t.classifier_version IS NOT NULL
            AND (t.quota_wait_until IS NULL OR t.quota_wait_until <= ?)
            AND NOT EXISTS (
              SELECT 1 FROM executions e WHERE e.task_id = t.id AND e.state = 'recovering'
@@ -757,6 +1077,28 @@ export class Scheduler {
          LIMIT 1`,
       )
       .get(now) as QueuedTaskRow | undefined;
+  }
+
+  private estimateQuotaFor(model: string, complexity: ComplexityClass): QuotaEstimate {
+    const rows = this.database.sqlite
+      .prepare(
+        `SELECT quota_usage_delta AS quotaUsageDelta
+         FROM executions
+         WHERE state = 'completed' AND selected_model = ? AND complexity = ?
+           AND quota_usage_delta IS NOT NULL
+         ORDER BY finished_at DESC LIMIT 100`,
+      )
+      .all(model, complexity) as Array<{ quotaUsageDelta: string }>;
+    const samples = rows.map((row) => {
+      try {
+        return { quotaUsageDelta: JSON.parse(row.quotaUsageDelta) as QuotaUsageDelta[] };
+      } catch {
+        return { quotaUsageDelta: null };
+      }
+    });
+    return refineQuotaEstimate(this.quotaPolicy.estimatePercentByComplexity[complexity], samples, {
+      usableShortPercent: 100 - this.quotaPolicy.shortReservePercent,
+    });
   }
 
   private async refreshQuota(): Promise<QuotaSnapshot | null> {

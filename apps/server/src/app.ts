@@ -30,6 +30,8 @@ import {
 } from './scheduler.js';
 import { InvalidTaskTransitionError, transitionTask } from './task-state.js';
 import type { QuotaPolicyConfig, QuotaProvider } from './quota-policy.js';
+import type { TaskClassifier } from './classifier.js';
+import type { ModelCatalogProvider, ModelPolicy } from './model-policy.js';
 
 interface AppOptions {
   databasePath?: string;
@@ -41,6 +43,9 @@ interface AppOptions {
   executor?: TaskExecutor;
   quotaProvider?: QuotaProvider;
   quotaPolicy?: Partial<QuotaPolicyConfig>;
+  classifier?: TaskClassifier;
+  modelCatalogProvider?: ModelCatalogProvider;
+  modelPolicy?: ModelPolicy;
 }
 
 const workerPausedKey = 'worker.paused';
@@ -55,6 +60,9 @@ export async function createApp(options: AppOptions = {}) {
     logger: app.log,
     ...(options.quotaProvider ? { quotaProvider: options.quotaProvider } : {}),
     ...(options.quotaPolicy ? { quotaPolicy: options.quotaPolicy } : {}),
+    ...(options.classifier ? { classifier: options.classifier } : {}),
+    ...(options.modelCatalogProvider ? { modelCatalogProvider: options.modelCatalogProvider } : {}),
+    ...(options.modelPolicy ? { modelPolicy: options.modelPolicy } : {}),
   });
 
   await app.register(cors, {
@@ -97,7 +105,7 @@ export async function createApp(options: AppOptions = {}) {
     return { status: 'ok', database: 'connected', timestamp: new Date().toISOString() };
   });
 
-  app.get('/api/version', () => ({ name: 'phantom', version: '0.1.0', phase: 5 }));
+  app.get('/api/version', () => ({ name: 'phantom', version: '0.1.0', phase: 6 }));
 
   app.get('/api/projects', () =>
     database.db.select().from(projects).orderBy(asc(projects.name)).all(),
@@ -171,6 +179,18 @@ export async function createApp(options: AppOptions = {}) {
     attemptCount: tasks.attemptCount,
     statusReason: tasks.statusReason,
     complexity: tasks.complexity,
+    classification: tasks.classification,
+    classifierVersion: tasks.classifierVersion,
+    classificationSource: tasks.classificationSource,
+    classifierFallbackUsed: tasks.classifierFallbackUsed,
+    modelTier: tasks.modelTier,
+    selectedModel: tasks.selectedModel,
+    selectedReasoning: tasks.selectedReasoning,
+    modelFallbackUsed: tasks.modelFallbackUsed,
+    modelSelectionRationale: tasks.modelSelectionRationale,
+    quotaEstimatePercent: tasks.quotaEstimatePercent,
+    quotaEstimateSource: tasks.quotaEstimateSource,
+    quotaEstimateSampleCount: tasks.quotaEstimateSampleCount,
     quotaWaitUntil: tasks.quotaWaitUntil,
     createdAt: tasks.createdAt,
     updatedAt: tasks.updatedAt,
@@ -226,6 +246,18 @@ export async function createApp(options: AppOptions = {}) {
       attemptCount: 0,
       statusReason: null,
       complexity: 'medium' as const,
+      classification: null,
+      classifierVersion: null,
+      classificationSource: null,
+      classifierFallbackUsed: false,
+      modelTier: null,
+      selectedModel: null,
+      selectedReasoning: null,
+      modelFallbackUsed: false,
+      modelSelectionRationale: null,
+      quotaEstimatePercent: null,
+      quotaEstimateSource: null,
+      quotaEstimateSampleCount: 0,
       quotaWaitUntil: null,
       createdAt: now,
       updatedAt: now,
@@ -254,7 +286,22 @@ export async function createApp(options: AppOptions = {}) {
     requireQueuedTask(database, id);
     database.db
       .update(tasks)
-      .set({ ...input, updatedAt: new Date().toISOString() })
+      .set({
+        ...input,
+        classification: null,
+        classifierVersion: null,
+        classificationSource: null,
+        classifierFallbackUsed: false,
+        modelTier: null,
+        selectedModel: null,
+        selectedReasoning: null,
+        modelFallbackUsed: false,
+        modelSelectionRationale: null,
+        quotaEstimatePercent: null,
+        quotaEstimateSource: null,
+        quotaEstimateSampleCount: 0,
+        updatedAt: new Date().toISOString(),
+      })
       .where(eq(tasks.id, id))
       .run();
     return getTask(database, id);
@@ -362,6 +409,7 @@ export async function createApp(options: AppOptions = {}) {
 
   app.get('/api/worker/health', () => scheduler.getHealth());
   app.get('/api/quota', () => scheduler.getQuotaStatus());
+  app.get('/api/classifier/health', () => scheduler.checkClassifierHealth());
 
   const dashboardRoot = options.dashboardRoot ?? defaultDashboardRoot;
   if (dashboardRoot && existsSync(dashboardRoot)) {
@@ -400,6 +448,18 @@ function getTask(database: DatabaseHandle, id: string) {
       attemptCount: tasks.attemptCount,
       statusReason: tasks.statusReason,
       complexity: tasks.complexity,
+      classification: tasks.classification,
+      classifierVersion: tasks.classifierVersion,
+      classificationSource: tasks.classificationSource,
+      classifierFallbackUsed: tasks.classifierFallbackUsed,
+      modelTier: tasks.modelTier,
+      selectedModel: tasks.selectedModel,
+      selectedReasoning: tasks.selectedReasoning,
+      modelFallbackUsed: tasks.modelFallbackUsed,
+      modelSelectionRationale: tasks.modelSelectionRationale,
+      quotaEstimatePercent: tasks.quotaEstimatePercent,
+      quotaEstimateSource: tasks.quotaEstimateSource,
+      quotaEstimateSampleCount: tasks.quotaEstimateSampleCount,
       quotaWaitUntil: tasks.quotaWaitUntil,
       createdAt: tasks.createdAt,
       updatedAt: tasks.updatedAt,

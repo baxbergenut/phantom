@@ -399,6 +399,9 @@ function BoardView({
                         <p>{task.instructions}</p>
                         <div className="task-footer">
                           <span className="status-label">{task.status.replace('_', ' ')}</span>
+                          {task.modelTier && (
+                            <span className={`model-tier ${task.modelTier}`}>{task.modelTier}</span>
+                          )}
                           {task.status === 'queued' && (
                             <select
                               aria-label={`Priority for ${task.title}`}
@@ -833,6 +836,57 @@ function TaskDetails({
               {new Date(task.quotaWaitUntil).toLocaleString()}
             </div>
           )}
+          {task.classification && (
+            <section className="classification-panel">
+              <div className="classification-heading">
+                <div>
+                  <small>Local classification</small>
+                  <strong>
+                    {task.classification.complexity.replace('_', ' ')} · {task.classification.risk}{' '}
+                    risk
+                  </strong>
+                </div>
+                <span className={`model-tier ${task.modelTier ?? task.classification.modelTier}`}>
+                  {task.modelTier ?? task.classification.modelTier}
+                </span>
+              </div>
+              <p>{task.classification.rationale}</p>
+              <div className="classification-facts">
+                <span>Confidence {(task.classification.confidence * 100).toFixed(0)}%</span>
+                <span>{task.classification.estimatedRuntimeClass} runtime</span>
+                <span>{task.quotaEstimatePercent?.toFixed(1) ?? '—'}% quota estimate</span>
+                <span>
+                  {task.quotaEstimateSource ?? 'baseline'} · {task.quotaEstimateSampleCount} samples
+                </span>
+              </div>
+              {task.selectedModel && (
+                <p className="model-explanation">
+                  <strong>
+                    {task.selectedModel} · {task.selectedReasoning} reasoning
+                  </strong>
+                  {task.modelSelectionRationale}
+                </p>
+              )}
+              {(task.classifierFallbackUsed || task.modelFallbackUsed) && (
+                <p className="fallback-note">
+                  Fallback used:{' '}
+                  {[
+                    task.classifierFallbackUsed ? 'deterministic classifier' : '',
+                    task.modelFallbackUsed ? 'alternate model tier' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(', ')}
+                </p>
+              )}
+              {task.classification.humanAttentionFlags.length > 0 && (
+                <div className="attention-flags">
+                  {task.classification.humanAttentionFlags.map((flag) => (
+                    <span key={flag}>{flag}</span>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
           <section className="history">
             <h4>Run history</h4>
             {executions.length > 0 && (
@@ -845,6 +899,12 @@ function TaskDetails({
                       {execution.recoveryCount ? ` · recovered ${execution.recoveryCount}×` : ''}
                     </span>
                     {execution.codexThreadId && <code>Thread {execution.codexThreadId}</code>}
+                    {execution.selectedModel && (
+                      <small>
+                        Model {execution.modelTier}: {execution.selectedModel} ·{' '}
+                        {execution.selectedReasoning} reasoning
+                      </small>
+                    )}
                     {execution.tokenUsage && (
                       <small>
                         {execution.tokenUsage.inputTokens.toLocaleString()} input ·{' '}

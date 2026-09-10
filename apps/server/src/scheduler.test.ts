@@ -444,10 +444,32 @@ function insertTask(
   database.sqlite
     .prepare(
       `INSERT INTO tasks
-       (id, project_id, title, instructions, priority, status, attempt_count, created_at, updated_at)
-       VALUES (?, ?, ?, 'test', ?, 'queued', 0, ?, ?)`,
+       (id, project_id, title, instructions, priority, status, attempt_count, complexity,
+        classification, classifier_version, classification_source, model_tier,
+        quota_estimate_percent, quota_estimate_source, created_at, updated_at)
+       VALUES (?, ?, ?, 'test', ?, 'queued', 0, 'medium', ?, 'test-fixture-v1',
+        'deterministic', 'standard', 20, 'baseline', ?, ?)`,
     )
-    .run(id, projectId, id, priority, createdAt, createdAt);
+    .run(
+      id,
+      projectId,
+      id,
+      priority,
+      JSON.stringify({
+        schemaVersion: 1,
+        complexity: 'medium',
+        risk: 'low',
+        confidence: 1,
+        rationale: 'Preclassified scheduler fixture.',
+        modelTier: 'standard',
+        reasoningLevel: 'medium',
+        estimatedRuntimeClass: 'moderate',
+        estimatedQuotaClass: 'medium',
+        humanAttentionFlags: [],
+      }),
+      createdAt,
+      createdAt,
+    );
 }
 
 function taskStatus(database: PhantomDatabase, id: string): string {

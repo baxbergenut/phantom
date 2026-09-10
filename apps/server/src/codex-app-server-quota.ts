@@ -9,6 +9,7 @@ import {
   type RawRateLimitsResponse,
   type RawRateLimitSnapshot,
 } from './quota-policy.js';
+import type { CodexModelInfo, ModelCatalogProvider } from './model-policy.js';
 
 export interface CodexAppServerQuotaConfig {
   command: string;
@@ -34,7 +35,7 @@ interface PendingRequest {
   timer: NodeJS.Timeout;
 }
 
-export class CodexAppServerQuotaProvider implements QuotaProvider {
+export class CodexAppServerQuotaProvider implements QuotaProvider, ModelCatalogProvider {
   private child: ChildProcessWithoutNullStreams | null = null;
   private reader: ReadLineInterface | null = null;
   private connecting: Promise<void> | null = null;
@@ -66,6 +67,23 @@ export class CodexAppServerQuotaProvider implements QuotaProvider {
     throw previousError instanceof Error
       ? previousError
       : new Error('Codex App Server quota read failed.');
+  }
+
+  async listModels(): Promise<CodexModelInfo[]> {
+    await this.ensureConnected();
+    const models: CodexModelInfo[] = [];
+    let cursor: string | null = null;
+    do {
+      const result = await this.sendRequest('model/list', {
+        limit: 100,
+        includeHidden: false,
+        ...(cursor ? { cursor } : {}),
+      });
+      const page = parseModelListResponse(result);
+      models.push(...page.data);
+      cursor = page.nextCursor;
+    } while (cursor);
+    return models;
   }
 
   subscribe(listener: (snapshot: QuotaSnapshot) => void): () => void {
@@ -123,9 +141,9 @@ export class CodexAppServerQuotaProvider implements QuotaProvider {
     this.write({ method: 'initialized' });
   }
 
-  private async sendRequest(method: string): Promise<unknown> {
+  private async sendRequest(method: string, params?: unknown): Promise<unknown> {
     if (!this.child) throw new Error('Codex App Server is not connected.');
-    return this.sendRequestDirect(method);
+    return this.sendRequestDirect(method, params);
   }
 
   private sendRequestDirect(method: string, params?: unknown): Promise<unknown> {
@@ -243,6 +261,45 @@ export class CodexAppServerQuotaProvider implements QuotaProvider {
       }),
     ]);
   }
+}
+
+function parseModelListResponse(value: unknown): {
+  data: CodexModelInfo[];
+  nextCursor: string | null;
+} {
+  if (!value || typeof value !== 'object') throw new Error('Codex returned malformed model data.');
+  const record = value as Record<string, unknown>;
+  if (!Array.isArray(record.data))
+    throw new Error('Codex model data did not include a model list.');
+  const data = record.data.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== 'object') return [];
+    const model = candidate as Record<string, unknown>;
+    if (typeof model.model !== 'string' || !Array.isArray(model.supportedReasoningEfforts))
+      return [];
+    const supportedReasoningEfforts = model.supportedReasoningEfforts.flatMap((option) => {
+      if (!option || typeof option !== 'object') return [];
+      const effort = (option as Record<string, unknown>).reasoningEffort;
+      return isReasoningLevel(effort) ? [effort] : [];
+    });
+    return [{ model: model.model, supportedReasoningEfforts }];
+  });
+  return {
+    data,
+    nextCursor: typeof record.nextCursor === 'string' ? record.nextCursor : null,
+  };
+}
+
+function isReasoningLevel(
+  value: unknown,
+): value is CodexModelInfo['supportedReasoningEfforts'][number] {
+  return (
+    value === 'none' ||
+    value === 'low' ||
+    value === 'medium' ||
+    value === 'high' ||
+    value === 'xhigh' ||
+    value === 'max'
+  );
 }
 
 export function codexAppServerQuotaConfigFromEnvironment(): CodexAppServerQuotaConfig {

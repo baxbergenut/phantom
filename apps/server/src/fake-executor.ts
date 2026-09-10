@@ -1,4 +1,10 @@
-import type { CodexEventKind, CodexFinalResult, TokenUsage } from '@phantom/shared';
+import type {
+  CodexEventKind,
+  CodexFinalResult,
+  ModelTier,
+  ReasoningLevel,
+  TokenUsage,
+} from '@phantom/shared';
 
 export interface ExecutorTask {
   id: string;
@@ -16,6 +22,9 @@ export interface ExecutorTask {
   retryCount: number;
   startingHead: string | null;
   startingRemoteSha: string | null;
+  modelTier?: ModelTier | null;
+  selectedModel?: string | null;
+  selectedReasoning?: ReasoningLevel | null;
   resumeReason?: 'quota_reset' | 'worker_recovery' | null;
 }
 

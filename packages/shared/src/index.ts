@@ -13,10 +13,31 @@ export const TASK_STATUSES = [
 
 export const TASK_PRIORITIES = ['urgent', 'high', 'normal', 'low'] as const;
 export const COMPLEXITY_CLASSES = ['small', 'medium', 'large', 'very_large'] as const;
+export const RISK_LEVELS = ['low', 'moderate', 'high', 'critical'] as const;
+export const MODEL_TIERS = ['economy', 'standard', 'advanced', 'premium'] as const;
+export const REASONING_LEVELS = ['none', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+export const RUNTIME_CLASSES = ['quick', 'moderate', 'long', 'extended'] as const;
 
 export const taskStatusSchema = z.enum(TASK_STATUSES);
 export const taskPrioritySchema = z.enum(TASK_PRIORITIES);
 export const complexityClassSchema = z.enum(COMPLEXITY_CLASSES);
+export const riskLevelSchema = z.enum(RISK_LEVELS);
+export const modelTierSchema = z.enum(MODEL_TIERS);
+export const reasoningLevelSchema = z.enum(REASONING_LEVELS);
+export const runtimeClassSchema = z.enum(RUNTIME_CLASSES);
+
+export const taskClassificationSchema = z.object({
+  schemaVersion: z.literal(1),
+  complexity: complexityClassSchema,
+  risk: riskLevelSchema,
+  confidence: z.number().min(0).max(1),
+  rationale: z.string().trim().min(1).max(2_000),
+  modelTier: modelTierSchema,
+  reasoningLevel: reasoningLevelSchema,
+  estimatedRuntimeClass: runtimeClassSchema,
+  estimatedQuotaClass: complexityClassSchema,
+  humanAttentionFlags: z.array(z.string().trim().min(1).max(100)).max(20),
+});
 
 const trimmedText = (label: string, maximum: number) =>
   z
@@ -136,6 +157,11 @@ export const codexEventKindSchema = z.enum(CODEX_EVENT_KINDS);
 export type TaskStatus = z.infer<typeof taskStatusSchema>;
 export type TaskPriority = z.infer<typeof taskPrioritySchema>;
 export type ComplexityClass = z.infer<typeof complexityClassSchema>;
+export type RiskLevel = z.infer<typeof riskLevelSchema>;
+export type ModelTier = z.infer<typeof modelTierSchema>;
+export type ReasoningLevel = z.infer<typeof reasoningLevelSchema>;
+export type RuntimeClass = z.infer<typeof runtimeClassSchema>;
+export type TaskClassification = z.infer<typeof taskClassificationSchema>;
 export type ProjectInput = z.infer<typeof projectInputSchema>;
 export type ProjectPatch = z.infer<typeof projectPatchSchema>;
 export type TaskInput = z.infer<typeof taskInputSchema>;
@@ -167,6 +193,18 @@ export interface Task {
   attemptCount: number;
   statusReason: string | null;
   complexity: ComplexityClass;
+  classification: TaskClassification | null;
+  classifierVersion: string | null;
+  classificationSource: 'ollama' | 'deterministic' | null;
+  classifierFallbackUsed: boolean;
+  modelTier: ModelTier | null;
+  selectedModel: string | null;
+  selectedReasoning: ReasoningLevel | null;
+  modelFallbackUsed: boolean;
+  modelSelectionRationale: string | null;
+  quotaEstimatePercent: number | null;
+  quotaEstimateSource: 'baseline' | 'historical' | null;
+  quotaEstimateSampleCount: number;
   quotaWaitUntil: string | null;
   createdAt: string;
   updatedAt: string;
@@ -221,6 +259,18 @@ export interface Execution {
   quotaAfterSnapshotId: string | null;
   quotaUsageDelta: QuotaUsageDelta[] | null;
   quotaWaitUntil: string | null;
+  complexity: ComplexityClass | null;
+  modelTier: ModelTier | null;
+  selectedModel: string | null;
+  selectedReasoning: ReasoningLevel | null;
+  modelFallbackUsed: boolean;
+  classifierVersion: string | null;
+  classifierFallbackUsed: boolean;
+  classification: TaskClassification | null;
+  modelSelectionRationale: string | null;
+  quotaEstimatePercent: number | null;
+  quotaEstimateSource: 'baseline' | 'historical' | null;
+  quotaEstimateSampleCount: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -308,7 +358,17 @@ export interface HealthResponse {
 export interface VersionResponse {
   name: 'phantom';
   version: string;
-  phase: 5;
+  phase: 6;
+}
+
+export interface ClassifierHealth {
+  available: boolean;
+  endpoint: string;
+  model: string;
+  modelInstalled: boolean;
+  checkedAt: string;
+  latencyMs: number;
+  error: string | null;
 }
 
 export interface ApiError {

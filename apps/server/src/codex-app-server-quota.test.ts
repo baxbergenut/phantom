@@ -55,6 +55,13 @@ describe('Codex App Server quota provider', () => {
     }
   });
 
+  it('reads model availability and supported reasoning efforts', async () => {
+    const provider = createProvider('normal');
+    await expect(provider.listModels()).resolves.toEqual([
+      { model: 'gpt-5.6-terra', supportedReasoningEfforts: ['medium', 'high'] },
+    ]);
+  });
+
   it('times out unresponsive reads and closes cleanly', async () => {
     const provider = createProvider('timeout', undefined, 30);
     await expect(provider.read()).rejects.toThrow('timed out');
