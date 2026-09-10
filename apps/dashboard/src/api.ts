@@ -5,6 +5,7 @@ import type {
   Project,
   ProjectInput,
   ProjectPatch,
+  QuotaStatus,
   Task,
   TaskEvent,
   TaskInput,
@@ -73,6 +74,7 @@ export const api = {
   taskExecutions: (id: string) => request<Execution[]>(`/api/tasks/${id}/executions`),
   executionEvents: (id: string) => request<ExecutionEvent[]>(`/api/executions/${id}/events`),
   workerHealth: () => request<WorkerHealth>('/api/worker/health'),
+  quota: () => request<QuotaStatus>('/api/quota'),
   workerSetting: () => request<WorkerSetting>('/api/settings/worker'),
   setWorkerPaused: (paused: boolean) =>
     request<WorkerSetting>('/api/settings/worker', {

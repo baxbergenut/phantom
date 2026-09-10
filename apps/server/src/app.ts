@@ -29,6 +29,7 @@ import {
   type SchedulerConfig,
 } from './scheduler.js';
 import { InvalidTaskTransitionError, transitionTask } from './task-state.js';
+import type { QuotaPolicyConfig, QuotaProvider } from './quota-policy.js';
 
 interface AppOptions {
   databasePath?: string;
@@ -38,6 +39,8 @@ interface AppOptions {
   schedulerEnabled?: boolean;
   schedulerConfig?: Partial<SchedulerConfig>;
   executor?: TaskExecutor;
+  quotaProvider?: QuotaProvider;
+  quotaPolicy?: Partial<QuotaPolicyConfig>;
 }
 
 const workerPausedKey = 'worker.paused';
@@ -50,6 +53,8 @@ export async function createApp(options: AppOptions = {}) {
     ...(options.executor ? { executor: options.executor } : {}),
     config: { ...schedulerConfigFromEnvironment(), ...options.schedulerConfig },
     logger: app.log,
+    ...(options.quotaProvider ? { quotaProvider: options.quotaProvider } : {}),
+    ...(options.quotaPolicy ? { quotaPolicy: options.quotaPolicy } : {}),
   });
 
   await app.register(cors, {
@@ -92,7 +97,7 @@ export async function createApp(options: AppOptions = {}) {
     return { status: 'ok', database: 'connected', timestamp: new Date().toISOString() };
   });
 
-  app.get('/api/version', () => ({ name: 'phantom', version: '0.1.0', phase: 4 }));
+  app.get('/api/version', () => ({ name: 'phantom', version: '0.1.0', phase: 5 }));
 
   app.get('/api/projects', () =>
     database.db.select().from(projects).orderBy(asc(projects.name)).all(),
@@ -165,6 +170,8 @@ export async function createApp(options: AppOptions = {}) {
     status: tasks.status,
     attemptCount: tasks.attemptCount,
     statusReason: tasks.statusReason,
+    complexity: tasks.complexity,
+    quotaWaitUntil: tasks.quotaWaitUntil,
     createdAt: tasks.createdAt,
     updatedAt: tasks.updatedAt,
   };
@@ -218,6 +225,8 @@ export async function createApp(options: AppOptions = {}) {
       status: 'queued' as const,
       attemptCount: 0,
       statusReason: null,
+      complexity: 'medium' as const,
+      quotaWaitUntil: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -287,6 +296,7 @@ export async function createApp(options: AppOptions = {}) {
       statusReason: null,
       expectedStatus: task.status,
     });
+    database.sqlite.prepare('UPDATE tasks SET quota_wait_until = NULL WHERE id = ?').run(id);
     return getTask(database, id);
   });
 
@@ -351,6 +361,7 @@ export async function createApp(options: AppOptions = {}) {
   });
 
   app.get('/api/worker/health', () => scheduler.getHealth());
+  app.get('/api/quota', () => scheduler.getQuotaStatus());
 
   const dashboardRoot = options.dashboardRoot ?? defaultDashboardRoot;
   if (dashboardRoot && existsSync(dashboardRoot)) {
@@ -388,6 +399,8 @@ function getTask(database: DatabaseHandle, id: string) {
       status: tasks.status,
       attemptCount: tasks.attemptCount,
       statusReason: tasks.statusReason,
+      complexity: tasks.complexity,
+      quotaWaitUntil: tasks.quotaWaitUntil,
       createdAt: tasks.createdAt,
       updatedAt: tasks.updatedAt,
     })

@@ -336,6 +336,29 @@ dd {
   border-radius: 12px;
   background: var(--panel);
 }
+.quota-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 20px;
+  align-items: center;
+  margin: -12px 0 24px;
+  padding: 17px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+}
+.quota-summary.stale {
+  border-color: #80652f;
+}
+.quota-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.quota-summary small {
+  color: var(--muted);
+}
 .direct-push-warning {
   display: grid;
   gap: 4px;
@@ -377,6 +400,7 @@ dd {
   text-transform: uppercase;
 }
 .worker-state.paused,
+.worker-state.waiting_quota,
 .worker-state.stale,
 .worker-state.stopping {
   color: #ffcf75;

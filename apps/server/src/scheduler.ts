@@ -2,7 +2,16 @@ import { randomUUID } from 'node:crypto';
 
 import type Database from 'better-sqlite3';
 
-import type { CodexEventKind, TaskPriority, WorkerHealth } from '@phantom/shared';
+import type {
+  CodexEventKind,
+  ComplexityClass,
+  QuotaSnapshot,
+  QuotaStatus,
+  QuotaUsageDelta,
+  TaskPriority,
+  TaskStatus,
+  WorkerHealth,
+} from '@phantom/shared';
 
 import type { PhantomDatabase } from './db/index.js';
 import {
@@ -12,6 +21,17 @@ import {
   type TaskExecutor,
 } from './fake-executor.js';
 import { transitionTaskInTransaction } from './task-state.js';
+import {
+  calculateQuotaDeltas,
+  defaultQuotaPolicyConfig,
+  evaluateQuotaGate,
+  isQuotaSnapshotFresh,
+  quotaPolicyConfigFromEnvironment,
+  quotaResetWait,
+  UnlimitedQuotaProvider,
+  type QuotaPolicyConfig,
+  type QuotaProvider,
+} from './quota-policy.js';
 
 const workerPausedKey = 'worker.paused';
 const leaseKey = 'global';
@@ -44,6 +64,7 @@ const silentLogger: SchedulerLogger = {
 
 interface WorkRow extends ExecutorTask {
   correlationId: string;
+  quotaBefore: QuotaSnapshot;
 }
 
 interface QueuedTaskRow {
@@ -57,6 +78,9 @@ interface QueuedTaskRow {
   remoteBranch: string;
   priority: TaskPriority;
   attemptCount: number;
+  status: TaskStatus;
+  complexity: ComplexityClass;
+  quotaWaitUntil: string | null;
 }
 
 interface RecoveringRow extends QueuedTaskRow {
@@ -88,10 +112,15 @@ export class Scheduler {
   private timer: NodeJS.Timeout | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private tickInFlight = false;
+  private tickWaiters: Array<() => void> = [];
   private stopping = false;
   private activeWork: WorkRow | null = null;
   private activePromise: Promise<void> | null = null;
   private abortController: AbortController | null = null;
+  private quotaWakeTimer: NodeJS.Timeout | null = null;
+  private latestQuotaSnapshot: QuotaSnapshot | null = null;
+  private quotaError: string | null = null;
+  private unsubscribeQuota: (() => void) | null = null;
 
   constructor(
     private readonly database: PhantomDatabase,
@@ -101,6 +130,8 @@ export class Scheduler {
       config?: Partial<SchedulerConfig>;
       logger?: SchedulerLogger;
       now?: () => Date;
+      quotaProvider?: QuotaProvider;
+      quotaPolicy?: Partial<QuotaPolicyConfig>;
     } = {},
   ) {
     this.workerId = options.workerId ?? `worker-${randomUUID()}`;
@@ -108,16 +139,37 @@ export class Scheduler {
     this.executor = options.executor ?? new FakeExecutor();
     this.logger = options.logger ?? silentLogger;
     this.now = options.now ?? (() => new Date());
+    this.quotaProvider = options.quotaProvider ?? new UnlimitedQuotaProvider(this.now);
+    const environmentQuotaPolicy = quotaPolicyConfigFromEnvironment();
+    this.quotaPolicy = {
+      ...defaultQuotaPolicyConfig,
+      ...environmentQuotaPolicy,
+      ...options.quotaPolicy,
+      estimatePercentByComplexity: {
+        ...defaultQuotaPolicyConfig.estimatePercentByComplexity,
+        ...environmentQuotaPolicy.estimatePercentByComplexity,
+        ...options.quotaPolicy?.estimatePercentByComplexity,
+      },
+    };
+    this.unsubscribeQuota =
+      this.quotaProvider.subscribe?.((snapshot) => {
+        this.persistQuotaSnapshot(snapshot);
+        this.latestQuotaSnapshot = snapshot;
+        this.quotaError = null;
+      }) ?? null;
   }
 
   private readonly executor: TaskExecutor;
   private readonly logger: SchedulerLogger;
   private readonly now: () => Date;
+  private readonly quotaProvider: QuotaProvider;
+  private readonly quotaPolicy: QuotaPolicyConfig;
 
   start(): void {
     if (this.timer || this.stopping) return;
     this.resetShutdownMarker();
     this.recoverStaleExecutions();
+    this.scheduleNextQuotaWake();
     void this.tick();
     this.timer = setInterval(() => void this.tick(), this.config.pollIntervalMs);
     this.timer.unref();
@@ -128,7 +180,9 @@ export class Scheduler {
     this.tickInFlight = true;
     try {
       this.recoverStaleExecutions();
-      const work = this.acquireWork();
+      const snapshot = await this.refreshQuota();
+      if (this.stopping) return false;
+      const work = this.acquireWork(snapshot);
       if (!work) return false;
       this.activeWork = work;
       this.abortController = new AbortController();
@@ -140,15 +194,27 @@ export class Scheduler {
       this.activeWork = null;
       this.abortController = null;
       this.tickInFlight = false;
+      for (const resolve of this.tickWaiters.splice(0)) resolve();
+      this.scheduleNextQuotaWake();
     }
   }
 
   async stop(): Promise<void> {
     if (this.stopping) return this.activePromise ?? Promise.resolve();
-    if (!this.timer && !this.activeWork && !this.tickInFlight) return;
+    if (!this.timer && !this.activeWork && !this.tickInFlight) {
+      this.stopping = true;
+      if (this.quotaWakeTimer) clearTimeout(this.quotaWakeTimer);
+      this.quotaWakeTimer = null;
+      this.unsubscribeQuota?.();
+      this.unsubscribeQuota = null;
+      await this.quotaProvider.close();
+      return;
+    }
     this.stopping = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    if (this.quotaWakeTimer) clearTimeout(this.quotaWakeTimer);
+    this.quotaWakeTimer = null;
 
     if (this.activeWork) {
       const now = this.now().toISOString();
@@ -178,8 +244,14 @@ export class Scheduler {
     }
 
     await this.activePromise;
+    if (this.tickInFlight) {
+      await new Promise<void>((resolve) => this.tickWaiters.push(resolve));
+    }
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     this.heartbeatTimer = null;
+    this.unsubscribeQuota?.();
+    this.unsubscribeQuota = null;
+    await this.quotaProvider.close();
   }
 
   cancelActiveTask(reason = 'Cancelled by the operator.'): boolean {
@@ -210,7 +282,7 @@ export class Scheduler {
       | undefined;
     const current = sqlite
       .prepare(
-        `SELECT t.id, t.title, p.name AS projectName, t.priority,
+        `SELECT t.id, t.title, p.name AS projectName, t.priority, t.status AS taskStatus,
                 e.heartbeat_at AS heartbeatAt, e.state
          FROM executions e
          JOIN tasks t ON t.id = e.task_id
@@ -226,14 +298,16 @@ export class Scheduler {
           priority: TaskPriority;
           heartbeatAt: string;
           state: 'running' | 'recovering';
+          taskStatus: TaskStatus;
         }
       | undefined;
-    const next = this.selectNextQueuedTask();
+    const next = this.selectNextDispatchableTask();
     const stale =
       current && this.now().getTime() - Date.parse(current.heartbeatAt) >= this.config.staleAfterMs;
     let status: WorkerHealth['status'] = 'idle';
     if (this.stopping || lease?.shuttingDown) status = 'stopping';
     else if (paused) status = 'paused';
+    else if (current?.taskStatus === 'waiting_quota') status = 'waiting_quota';
     else if (stale || current?.state === 'recovering') status = 'stale';
     else if (current) status = 'running';
 
@@ -263,6 +337,20 @@ export class Scheduler {
       paused,
       pollIntervalMs: this.config.pollIntervalMs,
       staleAfterMs: this.config.staleAfterMs,
+    };
+  }
+
+  getQuotaStatus(): QuotaStatus {
+    const snapshot = this.latestQuotaSnapshot ?? this.loadLatestQuotaSnapshot();
+    return {
+      snapshot,
+      fresh: isQuotaSnapshotFresh(snapshot, this.now(), this.quotaPolicy.freshnessMs),
+      staleAfterMs: this.quotaPolicy.freshnessMs,
+      error: this.quotaError,
+      reserves: {
+        short: this.quotaPolicy.shortReservePercent,
+        weekly: this.quotaPolicy.weeklyReservePercent,
+      },
     };
   }
 
@@ -312,7 +400,7 @@ export class Scheduler {
       .immediate();
   }
 
-  private acquireWork(): WorkRow | null {
+  private acquireWork(snapshot: QuotaSnapshot | null): WorkRow | null {
     const now = this.now();
     const nowIso = now.toISOString();
     const leaseExpiresAt = new Date(now.getTime() + this.config.leaseDurationMs).toISOString();
@@ -356,29 +444,64 @@ export class Scheduler {
                     t.id, t.title, t.instructions, t.project_id AS projectId,
                     p.name AS projectName, p.local_path AS projectPath,
                     p.remote_name AS remoteName, p.remote_branch AS remoteBranch,
-                    t.priority, t.attempt_count AS attemptCount
+                    t.priority, t.attempt_count AS attemptCount, t.status,
+                    t.complexity, t.quota_wait_until AS quotaWaitUntil
              FROM executions e
              JOIN tasks t ON t.id = e.task_id
              JOIN projects p ON p.id = t.project_id
              WHERE e.state = 'recovering'
+               AND (e.quota_wait_until IS NULL OR e.quota_wait_until <= ?)
              ORDER BY e.created_at LIMIT 1`,
           )
-          .get() as RecoveringRow | undefined;
+          .get(nowIso) as RecoveringRow | undefined;
         if (recovering) {
+          const decision = snapshot
+            ? evaluateQuotaGate(snapshot, recovering.complexity, this.quotaPolicy, now)
+            : null;
+          if (!snapshot || !decision?.allowed) {
+            const reason =
+              decision?.reason ??
+              `Live quota check failed; execution remains paused: ${this.quotaError ?? 'quota provider unavailable'}`;
+            const waitUntil =
+              decision?.waitUntil ??
+              new Date(now.getTime() + this.quotaPolicy.providerRetryDelayMs).toISOString();
+            this.deferRecoveringExecution(recovering, reason, waitUntil, nowIso);
+            this.releaseLease(nowIso, false);
+            return null;
+          }
           const correlationId = recovering.executionId;
+          const resumeReason: 'quota_reset' | 'worker_recovery' =
+            recovering.status === 'waiting_quota' ? 'quota_reset' : 'worker_recovery';
           const previous = parseRecoveryMetadata(recovering.recoveryMetadata);
           const metadata = JSON.stringify({
             ...previous,
             resumedAt: nowIso,
             resumeWorkerId: this.workerId,
+            resumeReason,
           });
           sqlite
             .prepare(
               `UPDATE executions SET state = 'running', worker_id = ?, heartbeat_at = ?,
-                 recovery_count = recovery_count + 1, recovery_metadata = ?, updated_at = ?
+                 recovery_count = recovery_count + 1, recovery_metadata = ?,
+                 quota_before_snapshot_id = COALESCE(quota_before_snapshot_id, ?),
+                 quota_wait_until = NULL, updated_at = ?
                WHERE id = ? AND state = 'recovering'`,
             )
-            .run(this.workerId, nowIso, metadata, nowIso, recovering.executionId);
+            .run(this.workerId, nowIso, metadata, snapshot.id, nowIso, recovering.executionId);
+          if (recovering.status === 'waiting_quota') {
+            transitionTaskInTransaction(sqlite, {
+              taskId: recovering.id,
+              newStatus: 'running',
+              expectedStatus: 'waiting_quota',
+              reason: 'Live quota refreshed after reset; resuming the same Codex thread.',
+              executionId: recovering.executionId,
+              correlationId,
+              now: nowIso,
+            });
+            sqlite
+              .prepare('UPDATE tasks SET quota_wait_until = NULL WHERE id = ?')
+              .run(recovering.id);
+          }
           this.claimLease(recovering.executionId, nowIso, leaseExpiresAt);
           this.logger.info(
             this.logContext({
@@ -391,10 +514,12 @@ export class Scheduler {
             ...recovering,
             correlationId,
             recoveryCount: recovering.recoveryCount + 1,
+            resumeReason,
+            quotaBefore: snapshot,
           };
         }
 
-        const task = this.selectNextQueuedTask();
+        const task = this.selectNextDispatchableTask();
         if (!task) {
           sqlite
             .prepare(
@@ -405,24 +530,52 @@ export class Scheduler {
           return null;
         }
 
+        const decision = snapshot
+          ? evaluateQuotaGate(snapshot, task.complexity, this.quotaPolicy, now)
+          : null;
+        if (!snapshot || !decision?.allowed) {
+          const reason =
+            decision?.reason ??
+            `Live quota check failed; task was not dispatched: ${this.quotaError ?? 'quota provider unavailable'}`;
+          const waitUntil =
+            decision?.waitUntil ??
+            new Date(now.getTime() + this.quotaPolicy.providerRetryDelayMs).toISOString();
+          this.deferTaskBeforeExecution(task, reason, waitUntil, nowIso);
+          this.releaseLease(nowIso, false);
+          return null;
+        }
+
         const executionId = randomUUID();
         const attemptNumber = task.attemptCount + 1;
         sqlite
           .prepare(
             `INSERT INTO executions
               (id, task_id, attempt_number, state, worker_id, started_at, heartbeat_at,
-               recovery_count, created_at, updated_at)
-             VALUES (?, ?, ?, 'running', ?, ?, ?, 0, ?, ?)`,
+               recovery_count, quota_before_snapshot_id, created_at, updated_at)
+             VALUES (?, ?, ?, 'running', ?, ?, ?, 0, ?, ?, ?)`,
           )
-          .run(executionId, task.id, attemptNumber, this.workerId, nowIso, nowIso, nowIso, nowIso);
+          .run(
+            executionId,
+            task.id,
+            attemptNumber,
+            this.workerId,
+            nowIso,
+            nowIso,
+            snapshot.id,
+            nowIso,
+            nowIso,
+          );
         sqlite
-          .prepare('UPDATE tasks SET attempt_count = ? WHERE id = ?')
+          .prepare('UPDATE tasks SET attempt_count = ?, quota_wait_until = NULL WHERE id = ?')
           .run(attemptNumber, task.id);
         transitionTaskInTransaction(sqlite, {
           taskId: task.id,
           newStatus: 'running',
-          expectedStatus: 'queued',
-          reason: 'Acquired by the Codex executor.',
+          expectedStatus: task.status,
+          reason:
+            task.status === 'waiting_quota'
+              ? 'Quota reserve is available; task dispatched.'
+              : 'Fresh quota check passed; acquired by the Codex executor.',
           executionId,
           correlationId: executionId,
           now: nowIso,
@@ -437,7 +590,9 @@ export class Scheduler {
           retryCount: 0,
           startingHead: null,
           startingRemoteSha: null,
+          resumeReason: null,
           correlationId: executionId,
+          quotaBefore: snapshot,
         };
         this.logger.info(this.logContext(work), 'Queued task acquired.');
         return work;
@@ -458,7 +613,22 @@ export class Scheduler {
         beginRetry: (reason) => this.beginRetry(work, reason),
         recordGitState: (state) => this.recordGitState(work, state),
       });
+      const after = await this.refreshQuota();
+      this.recordQuotaAfter(work, after);
       if (this.stopping) return;
+      if (result.status === 'waiting_quota') {
+        const reason = result.reason || 'Codex reported that quota is exhausted.';
+        this.reportExecutionEvent(work, 'failure', reason, {
+          category: 'rate_limit',
+          quotaWait: true,
+        });
+        this.waitForQuota(work, reason, after, {
+          finalResult: result.finalResult,
+          tokenUsage: result.tokenUsage,
+          rawLogPath: result.rawLogPath,
+        });
+        return;
+      }
       this.reportExecutionEvent(
         work,
         'final',
@@ -478,6 +648,8 @@ export class Scheduler {
         return;
       }
       const reason = error instanceof Error ? error.message : 'Unknown executor error.';
+      const after = await this.refreshQuota();
+      this.recordQuotaAfter(work, after);
       this.finishExecution(work, 'failed', reason);
     } finally {
       if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
@@ -564,21 +736,277 @@ export class Scheduler {
       .immediate();
   }
 
-  private selectNextQueuedTask(): QueuedTaskRow | undefined {
+  private selectNextDispatchableTask(): QueuedTaskRow | undefined {
+    const now = this.now().toISOString();
     return this.database.sqlite
       .prepare(
         `SELECT t.id, t.title, t.instructions, t.project_id AS projectId,
                 p.name AS projectName, p.local_path AS projectPath,
                 p.remote_name AS remoteName, p.remote_branch AS remoteBranch,
-                t.priority, t.attempt_count AS attemptCount
+                t.priority, t.attempt_count AS attemptCount, t.status,
+                t.complexity, t.quota_wait_until AS quotaWaitUntil
          FROM tasks t JOIN projects p ON p.id = t.project_id
-         WHERE t.status = 'queued' AND p.enabled = true
+         WHERE t.status IN ('queued', 'waiting_quota') AND p.enabled = true
+           AND (t.quota_wait_until IS NULL OR t.quota_wait_until <= ?)
+           AND NOT EXISTS (
+             SELECT 1 FROM executions e WHERE e.task_id = t.id AND e.state = 'recovering'
+           )
          ORDER BY CASE t.priority
            WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END,
            t.created_at, t.id
          LIMIT 1`,
       )
-      .get() as QueuedTaskRow | undefined;
+      .get(now) as QueuedTaskRow | undefined;
+  }
+
+  private async refreshQuota(): Promise<QuotaSnapshot | null> {
+    try {
+      const snapshot = await this.quotaProvider.read();
+      this.persistQuotaSnapshot(snapshot);
+      this.latestQuotaSnapshot = snapshot;
+      this.quotaError = null;
+      return snapshot;
+    } catch (error) {
+      this.quotaError = error instanceof Error ? error.message : 'Live quota check failed.';
+      this.logger.warn(
+        { component: 'quota', workerId: this.workerId, error: this.quotaError },
+        'Live quota snapshot unavailable.',
+      );
+      return null;
+    }
+  }
+
+  private persistQuotaSnapshot(snapshot: QuotaSnapshot): void {
+    const sqlite = this.database.sqlite;
+    sqlite
+      .transaction(() => {
+        const inserted = sqlite
+          .prepare(
+            `INSERT OR IGNORE INTO quota_snapshots
+             (id, account_id, source, observed_at, created_at) VALUES (?, ?, ?, ?, ?)`,
+          )
+          .run(
+            snapshot.id,
+            snapshot.accountId,
+            snapshot.source,
+            snapshot.observedAt,
+            this.now().toISOString(),
+          );
+        if (inserted.changes === 0) return;
+        const statement = sqlite.prepare(
+          `INSERT INTO quota_windows
+           (id, snapshot_id, limit_id, limit_name, kind, used_percent, remaining_percent,
+            window_duration_mins, resets_at, plan_type)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        );
+        for (const window of snapshot.windows) {
+          statement.run(
+            randomUUID(),
+            snapshot.id,
+            window.limitId,
+            window.limitName,
+            window.kind,
+            window.usedPercent,
+            window.remainingPercent,
+            window.windowDurationMins,
+            window.resetsAt,
+            window.planType,
+          );
+        }
+      })
+      .immediate();
+  }
+
+  private loadLatestQuotaSnapshot(): QuotaSnapshot | null {
+    const snapshot = this.database.sqlite
+      .prepare(
+        `SELECT id, account_id AS accountId, source, observed_at AS observedAt
+         FROM quota_snapshots ORDER BY observed_at DESC, rowid DESC LIMIT 1`,
+      )
+      .get() as Omit<QuotaSnapshot, 'windows'> | undefined;
+    if (!snapshot) return null;
+    const windows = this.database.sqlite
+      .prepare(
+        `SELECT limit_id AS limitId, limit_name AS limitName, kind,
+                used_percent AS usedPercent, remaining_percent AS remainingPercent,
+                window_duration_mins AS windowDurationMins, resets_at AS resetsAt,
+                plan_type AS planType
+         FROM quota_windows WHERE snapshot_id = ? ORDER BY limit_id, window_duration_mins`,
+      )
+      .all(snapshot.id) as QuotaSnapshot['windows'];
+    return { ...snapshot, windows };
+  }
+
+  private recordQuotaAfter(work: WorkRow, after: QuotaSnapshot | null): void {
+    const deltas = calculateQuotaDeltas(work.quotaBefore, after);
+    const stored = this.database.sqlite
+      .prepare('SELECT quota_usage_delta AS deltas FROM executions WHERE id = ?')
+      .get(work.executionId) as { deltas: string | null } | undefined;
+    const combined = [...parseQuotaDeltas(stored?.deltas), ...deltas];
+    this.database.sqlite
+      .prepare(
+        `UPDATE executions SET quota_after_snapshot_id = ?, quota_usage_delta = ?, updated_at = ?
+         WHERE id = ? AND state = 'running' AND worker_id = ?`,
+      )
+      .run(
+        after?.id ?? null,
+        JSON.stringify(combined),
+        this.now().toISOString(),
+        work.executionId,
+        this.workerId,
+      );
+    if (after) {
+      this.reportExecutionEvent(work, 'usage', 'Live quota measured after execution.', {
+        deltas,
+        observedAt: after.observedAt,
+      });
+    }
+  }
+
+  private deferTaskBeforeExecution(
+    task: QueuedTaskRow,
+    reason: string,
+    waitUntil: string,
+    now: string,
+  ): void {
+    if (task.status === 'queued') {
+      transitionTaskInTransaction(this.database.sqlite, {
+        taskId: task.id,
+        newStatus: 'waiting_quota',
+        expectedStatus: 'queued',
+        reason,
+        statusReason: reason,
+        correlationId: randomUUID(),
+        now,
+      });
+    }
+    this.database.sqlite
+      .prepare(
+        `UPDATE tasks SET status_reason = ?, quota_wait_until = ?, updated_at = ? WHERE id = ?`,
+      )
+      .run(reason, waitUntil, now, task.id);
+  }
+
+  private deferRecoveringExecution(
+    execution: RecoveringRow,
+    reason: string,
+    waitUntil: string,
+    now: string,
+  ): void {
+    this.database.sqlite
+      .prepare(
+        `UPDATE executions SET quota_wait_until = ?, recovery_metadata = ?, updated_at = ?
+         WHERE id = ? AND state = 'recovering'`,
+      )
+      .run(
+        waitUntil,
+        JSON.stringify({
+          ...parseRecoveryMetadata(execution.recoveryMetadata),
+          reason: 'quota_wait',
+          quotaReason: reason,
+          waitUntil,
+        }),
+        now,
+        execution.executionId,
+      );
+    if (execution.status === 'running') {
+      transitionTaskInTransaction(this.database.sqlite, {
+        taskId: execution.id,
+        newStatus: 'waiting_quota',
+        expectedStatus: 'running',
+        reason,
+        statusReason: reason,
+        executionId: execution.executionId,
+        correlationId: execution.executionId,
+        now,
+      });
+    }
+    this.database.sqlite
+      .prepare(
+        `UPDATE tasks SET status_reason = ?, quota_wait_until = ?, updated_at = ? WHERE id = ?`,
+      )
+      .run(reason, waitUntil, now, execution.id);
+  }
+
+  private waitForQuota(
+    work: WorkRow,
+    reason: string,
+    snapshot: QuotaSnapshot | null,
+    details: {
+      finalResult?: unknown | undefined;
+      tokenUsage?: unknown | undefined;
+      rawLogPath?: string | undefined;
+    },
+  ): void {
+    const now = this.now();
+    const nowIso = now.toISOString();
+    const waitUntil = quotaResetWait(snapshot ?? work.quotaBefore, now, this.quotaPolicy);
+    this.database.sqlite
+      .transaction(() => {
+        const owned = this.database.sqlite
+          .prepare("SELECT id FROM executions WHERE id = ? AND state = 'running' AND worker_id = ?")
+          .get(work.executionId, this.workerId);
+        if (!owned) return;
+        transitionTaskInTransaction(this.database.sqlite, {
+          taskId: work.id,
+          newStatus: 'waiting_quota',
+          expectedStatus: 'running',
+          reason: `${reason} Resume scheduled for ${waitUntil}.`,
+          statusReason: reason,
+          executionId: work.executionId,
+          correlationId: work.correlationId,
+          now: nowIso,
+        });
+        this.database.sqlite
+          .prepare(`UPDATE tasks SET quota_wait_until = ?, updated_at = ? WHERE id = ?`)
+          .run(waitUntil, nowIso, work.id);
+        this.database.sqlite
+          .prepare(
+            `UPDATE executions SET state = 'recovering', worker_id = NULL,
+               heartbeat_at = ?, recovery_metadata = ?, error = ?, quota_wait_until = ?,
+               final_result = COALESCE(?, final_result), token_usage = COALESCE(?, token_usage),
+               raw_log_path = COALESCE(?, raw_log_path), updated_at = ? WHERE id = ?`,
+          )
+          .run(
+            nowIso,
+            JSON.stringify({ reason: 'quota_wait', quotaReason: reason, waitUntil }),
+            reason,
+            waitUntil,
+            details.finalResult ? JSON.stringify(details.finalResult) : null,
+            details.tokenUsage ? JSON.stringify(details.tokenUsage) : null,
+            details.rawLogPath ?? null,
+            nowIso,
+            work.executionId,
+          );
+        this.releaseLease(nowIso, false);
+      })
+      .immediate();
+    this.logger.info(
+      { ...this.logContext(work), reason, waitUntil },
+      'Execution paused until quota reset.',
+    );
+  }
+
+  private scheduleNextQuotaWake(): void {
+    if (this.stopping || !this.timer) return;
+    if (this.quotaWakeTimer) clearTimeout(this.quotaWakeTimer);
+    this.quotaWakeTimer = null;
+    const row = this.database.sqlite
+      .prepare(
+        `SELECT MIN(quota_wait_until) AS waitUntil FROM tasks
+         WHERE status = 'waiting_quota' AND quota_wait_until IS NOT NULL`,
+      )
+      .get() as { waitUntil: string | null };
+    if (!row.waitUntil) return;
+    const delay = Math.max(0, Date.parse(row.waitUntil) - this.now().getTime());
+    this.quotaWakeTimer = setTimeout(
+      () => {
+        this.quotaWakeTimer = null;
+        void this.tick();
+      },
+      Math.min(delay, 2_147_483_647),
+    );
+    this.quotaWakeTimer.unref();
   }
 
   private claimLease(executionId: string, heartbeatAt: string, leaseExpiresAt: string): void {
@@ -748,6 +1176,16 @@ function parseRecoveryMetadata(value: string | null): Record<string, unknown> {
       : {};
   } catch {
     return {};
+  }
+}
+
+function parseQuotaDeltas(value: string | null | undefined): QuotaUsageDelta[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? (parsed as QuotaUsageDelta[]) : [];
+  } catch {
+    return [];
   }
 }
 

@@ -12,9 +12,11 @@ export const TASK_STATUSES = [
 ] as const;
 
 export const TASK_PRIORITIES = ['urgent', 'high', 'normal', 'low'] as const;
+export const COMPLEXITY_CLASSES = ['small', 'medium', 'large', 'very_large'] as const;
 
 export const taskStatusSchema = z.enum(TASK_STATUSES);
 export const taskPrioritySchema = z.enum(TASK_PRIORITIES);
+export const complexityClassSchema = z.enum(COMPLEXITY_CLASSES);
 
 const trimmedText = (label: string, maximum: number) =>
   z
@@ -133,6 +135,7 @@ export const codexEventKindSchema = z.enum(CODEX_EVENT_KINDS);
 
 export type TaskStatus = z.infer<typeof taskStatusSchema>;
 export type TaskPriority = z.infer<typeof taskPrioritySchema>;
+export type ComplexityClass = z.infer<typeof complexityClassSchema>;
 export type ProjectInput = z.infer<typeof projectInputSchema>;
 export type ProjectPatch = z.infer<typeof projectPatchSchema>;
 export type TaskInput = z.infer<typeof taskInputSchema>;
@@ -163,6 +166,8 @@ export interface Task {
   status: TaskStatus;
   attemptCount: number;
   statusReason: string | null;
+  complexity: ComplexityClass;
+  quotaWaitUntil: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -212,6 +217,10 @@ export interface Execution {
     authorEmail: string;
     authoredAt: string;
   } | null;
+  quotaBeforeSnapshotId: string | null;
+  quotaAfterSnapshotId: string | null;
+  quotaUsageDelta: QuotaUsageDelta[] | null;
+  quotaWaitUntil: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -240,7 +249,7 @@ export interface WorkerTaskSummary {
 }
 
 export interface WorkerHealth {
-  status: 'idle' | 'running' | 'paused' | 'stale' | 'stopping';
+  status: 'idle' | 'running' | 'waiting_quota' | 'paused' | 'stale' | 'stopping';
   workerId: string;
   leaseOwner: string | null;
   leaseExpiresAt: string | null;
@@ -253,6 +262,43 @@ export interface WorkerHealth {
   staleAfterMs: number;
 }
 
+export type QuotaWindowKind = 'short' | 'weekly' | 'other';
+
+export interface QuotaWindow {
+  limitId: string;
+  limitName: string | null;
+  kind: QuotaWindowKind;
+  usedPercent: number;
+  remainingPercent: number;
+  windowDurationMins: number | null;
+  resetsAt: string | null;
+  planType: string | null;
+}
+
+export interface QuotaSnapshot {
+  id: string;
+  accountId: string | null;
+  source: 'read' | 'notification';
+  observedAt: string;
+  windows: QuotaWindow[];
+}
+
+export interface QuotaUsageDelta {
+  limitId: string;
+  kind: QuotaWindowKind;
+  beforeUsedPercent: number;
+  afterUsedPercent: number;
+  usedPercentDelta: number;
+}
+
+export interface QuotaStatus {
+  snapshot: QuotaSnapshot | null;
+  fresh: boolean;
+  staleAfterMs: number;
+  error: string | null;
+  reserves: { short: number; weekly: number };
+}
+
 export interface HealthResponse {
   status: 'ok';
   database: 'connected';
@@ -262,7 +308,7 @@ export interface HealthResponse {
 export interface VersionResponse {
   name: 'phantom';
   version: string;
-  phase: 4;
+  phase: 5;
 }
 
 export interface ApiError {

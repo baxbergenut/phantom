@@ -134,7 +134,9 @@ export class CodexExecutor implements TaskExecutor {
       ? {
           threadId,
           prompt: [
-            'The Phantom worker restarted while the original task was in progress.',
+            context.task.resumeReason === 'quota_reset'
+              ? 'The quota window reset after the original task was paused.'
+              : 'The Phantom worker restarted while the original task was in progress.',
             'Resume the original task from the current repository state, verify the work, and return a valid result matching the supplied schema.',
             this.gitAdapter
               ? `Commit meaningful changes with an informative message and push normally to ${context.task.remoteName}/${context.task.remoteBranch}. Never force-push.`

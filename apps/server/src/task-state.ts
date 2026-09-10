@@ -5,7 +5,7 @@ import type Database from 'better-sqlite3';
 import type { TaskStatus } from '@phantom/shared';
 
 export const allowedTaskTransitions: Readonly<Record<TaskStatus, readonly TaskStatus[]>> = {
-  queued: ['classifying', 'running', 'blocked'],
+  queued: ['classifying', 'waiting_quota', 'running', 'blocked'],
   classifying: ['queued', 'waiting_quota', 'running', 'failed', 'blocked'],
   waiting_quota: ['classifying', 'running', 'blocked'],
   running: ['queued', 'waiting_quota', 'retrying', 'completed', 'failed', 'blocked'],

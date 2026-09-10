@@ -1,8 +1,8 @@
 # Phantom
 
 Phantom is a local, single-user dashboard for managing Codex tasks across local Git
-repositories. Phase 4 adds guarded Git synchronization, Codex commits and direct
-pushes, and independent verification that completed work reached the configured branch.
+repositories. Phase 5 adds live Codex quota gating, durable reset-aware scheduling,
+and before/after usage history on top of guarded direct Git pushes.
 
 ## Requirements
 
@@ -48,7 +48,7 @@ The checked-in `.env.example` documents available settings. This checkout also h
 ignored local `.env` configured for `127.0.0.1:4310` and `data/phantom.db`. Windows
 service packaging remains intentionally deferred to Phase 8.
 
-## Phase 4 behavior
+## Phase 5 behavior
 
 - Project paths are resolved and validated with read-only Git commands.
 - Tasks are created in `queued` and the scheduler runs one task at a time.
@@ -84,8 +84,24 @@ service packaging remains intentionally deferred to Phase 8.
 - Executions store the Codex thread ID, concise live events, aggregate per-turn token
   usage, and a validated versioned final result. Invalid or missing structured output
   fails the attempt.
-- Normal failure receives at most one retry in the same Codex thread. Rate limits enter
-  `waiting_quota`; reset-aware wakeup arrives in Phase 5.
+- Phantom initializes a narrow Codex App Server client, correlates JSON-RPC requests,
+  consumes sparse quota notifications, reconnects once after transport failures, and
+  closes the child process cleanly.
+- Every dispatch requires a fresh `account/rateLimits/read`. If the read fails, data is
+  stale, or a required short/weekly window is missing, the task remains
+  `waiting_quota` and no execution attempt is consumed.
+- All returned quota buckets are persisted. Windows are identified from their duration
+  rather than `primary`/`secondary` position and the dashboard shows consumption,
+  remaining percentage, resets, and freshness.
+- Dispatch reserves 15% of the five-hour window and 10% of the weekly window by
+  default. Until Phase 6 classifies tasks, new tasks use the medium estimate: 20% of
+  usable short-window capacity.
+- Normal failure receives at most one retry in the same Codex thread. A quota
+  interruption persists its reset time, releases the worker lease, and resumes the
+  original execution and Codex thread after reset without consuming that retry.
+- Executions retain before/after quota snapshots and per-window usage deltas, including
+  each segment around a quota pause. Reset timers are reconstructed from SQLite after
+  restart.
 - Active work can be cancelled from the dashboard. Timeout and cancellation terminate
   the child process and are stored as distinct failure categories before the scheduler
   releases its global lease.
@@ -100,6 +116,11 @@ The scheduler polls every 60 seconds. The optional environment settings
 `PHANTOM_CODEX_EXECUTABLE`, `PHANTOM_CODEX_MODEL`, `PHANTOM_CODEX_REASONING`, and
 `PHANTOM_CODEX_TIMEOUT_MS` configure Codex; defaults are `codex`, `gpt-5.6-sol`,
 `high`, and one hour.
+
+Quota defaults are a 10-second App Server request timeout, 30-second freshness limit,
+30-second post-reset safety delay, and 60-second provider retry. The
+`PHANTOM_QUOTA_*` entries in `.env.example` configure those values, short/weekly
+reserves, and the small/medium/large/very-large estimates used by the scheduler.
 
 The full roadmap and locked safety decisions are in
 [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).

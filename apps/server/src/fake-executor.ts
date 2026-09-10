@@ -16,6 +16,7 @@ export interface ExecutorTask {
   retryCount: number;
   startingHead: string | null;
   startingRemoteSha: string | null;
+  resumeReason?: 'quota_reset' | 'worker_recovery' | null;
 }
 
 export interface ExecutorContext {

@@ -2,10 +2,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
+import type { QuotaSnapshot } from '@phantom/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { openDatabase, type PhantomDatabase } from './db/index.js';
 import { FakeExecutor, type FakeScenario, type TaskExecutor } from './fake-executor.js';
+import type { QuotaProvider } from './quota-policy.js';
 import { Scheduler } from './scheduler.js';
 import {
   allowedTaskTransitions,
@@ -249,7 +251,163 @@ describe('persistent scheduler', () => {
           )
           .get('codex-task') as { count: number }
       ).count,
-    ).toBe(3);
+    ).toBe(4);
+  });
+
+  it('does not dispatch when a fresh quota read fails', async () => {
+    insertTask(database, 'quota-offline', 'normal', '2026-01-01T00:00:00.000Z');
+    let starts = 0;
+    const scheduler = new Scheduler(database, {
+      executor: new FakeExecutor(() => {
+        starts += 1;
+        return { outcome: 'success' };
+      }),
+      quotaProvider: new SequenceQuotaProvider([new Error('protocol unavailable')]),
+      now: () => new Date('2026-01-01T00:00:00.000Z'),
+    });
+
+    expect(await scheduler.tick()).toBe(false);
+    expect(starts).toBe(0);
+    expect(taskStatus(database, 'quota-offline')).toBe('waiting_quota');
+    expect(executionCount(database, 'quota-offline')).toBe(0);
+    const waiting = database.sqlite
+      .prepare(
+        'SELECT status_reason AS reason, quota_wait_until AS waitUntil FROM tasks WHERE id = ?',
+      )
+      .get('quota-offline') as { reason: string; waitUntil: string };
+    expect(waiting.reason).toContain('protocol unavailable');
+    expect(waiting.waitUntil).toBe('2026-01-01T00:01:00.000Z');
+  });
+
+  it('enforces short and weekly reserves without consuming an attempt', async () => {
+    insertTask(database, 'short-blocked', 'normal', '2026-01-01T00:00:00.000Z');
+    const at = new Date('2026-01-01T00:00:00.000Z');
+    const shortScheduler = new Scheduler(database, {
+      quotaProvider: new SequenceQuotaProvider([quotaSnapshot(at, 69, 20)]),
+      now: () => at,
+    });
+    expect(await shortScheduler.tick()).toBe(false);
+    expect(taskStatus(database, 'short-blocked')).toBe('waiting_quota');
+    expect(executionCount(database, 'short-blocked')).toBe(0);
+
+    insertTask(database, 'weekly-blocked', 'high', '2026-01-01T00:00:01.000Z');
+    const weeklyScheduler = new Scheduler(database, {
+      quotaProvider: new SequenceQuotaProvider([quotaSnapshot(at, 10, 90)]),
+      now: () => at,
+    });
+    expect(await weeklyScheduler.tick()).toBe(false);
+    expect(taskStatus(database, 'weekly-blocked')).toBe('waiting_quota');
+    expect(executionCount(database, 'weekly-blocked')).toBe(0);
+  });
+
+  it('resumes a quota-interrupted Codex thread after restart without a retry or new attempt', async () => {
+    insertTask(database, 'quota-resume', 'normal', '2026-01-01T00:00:00.000Z');
+    let nowMs = Date.parse('2026-01-01T00:00:00.000Z');
+    const resetAt = new Date(nowMs + 60_000);
+    let calls = 0;
+    const executor: TaskExecutor = {
+      async execute(context) {
+        calls += 1;
+        if (calls === 1) {
+          context.setThreadId('thread-survives-reset');
+          return { status: 'waiting_quota', reason: 'Rate limit reached.' };
+        }
+        expect(context.task.codexThreadId).toBe('thread-survives-reset');
+        expect(context.task.resumeReason).toBe('quota_reset');
+        return { status: 'completed', reason: 'Resumed after reset.' };
+      },
+    };
+    const firstProvider = new SequenceQuotaProvider([
+      quotaSnapshot(new Date(nowMs), 20, 50, resetAt),
+      quotaSnapshot(new Date(nowMs), 100, 50, resetAt),
+    ]);
+    const first = new Scheduler(database, {
+      executor,
+      quotaProvider: firstProvider,
+      quotaPolicy: { resetSafetyDelayMs: 1_000 },
+      now: () => new Date(nowMs),
+    });
+    await first.tick();
+    expect(taskStatus(database, 'quota-resume')).toBe('waiting_quota');
+    expect(executionState(database, 'quota-resume')).toBe('recovering');
+
+    nowMs = resetAt.getTime() + 1_000;
+    const second = new Scheduler(database, {
+      executor,
+      quotaProvider: new SequenceQuotaProvider([
+        quotaSnapshot(new Date(nowMs), 0, 50),
+        quotaSnapshot(new Date(nowMs + 1_000), 3.5, 51),
+      ]),
+      now: () => new Date(nowMs),
+    });
+    await second.tick();
+
+    expect(taskStatus(database, 'quota-resume')).toBe('completed');
+    expect(executionCount(database, 'quota-resume')).toBe(1);
+    const execution = database.sqlite
+      .prepare(
+        `SELECT attempt_number AS attemptNumber, retry_count AS retryCount,
+                quota_usage_delta AS quotaUsageDelta, quota_before_snapshot_id AS beforeId,
+                quota_after_snapshot_id AS afterId
+         FROM executions WHERE task_id = ?`,
+      )
+      .get('quota-resume') as {
+      attemptNumber: number;
+      retryCount: number;
+      quotaUsageDelta: string;
+      beforeId: string;
+      afterId: string;
+    };
+    expect(execution.attemptNumber).toBe(1);
+    expect(execution.retryCount).toBe(0);
+    expect(execution.beforeId).not.toBe(execution.afterId);
+    expect(JSON.parse(execution.quotaUsageDelta)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'short', beforeUsedPercent: 0, afterUsedPercent: 3.5 }),
+      ]),
+    );
+    expect(eventStatuses(database, 'quota-resume')).toEqual([
+      'running',
+      'waiting_quota',
+      'running',
+      'completed',
+    ]);
+  });
+
+  it('waits for an in-flight quota read during shutdown and does not acquire work', async () => {
+    insertTask(database, 'shutdown-during-quota', 'normal', '2026-01-01T00:00:00.000Z');
+    const at = new Date('2026-01-01T00:00:00.000Z');
+    let release!: (snapshot: QuotaSnapshot) => void;
+    let closed = false;
+    let starts = 0;
+    const quotaProvider: QuotaProvider = {
+      read: () => new Promise((resolve) => (release = resolve)),
+      close: async () => {
+        closed = true;
+      },
+    };
+    const scheduler = new Scheduler(database, {
+      quotaProvider,
+      executor: new FakeExecutor(() => {
+        starts += 1;
+        return { outcome: 'success' };
+      }),
+      now: () => at,
+    });
+    scheduler.start();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    let stopped = false;
+    const stopping = scheduler.stop().then(() => {
+      stopped = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(stopped).toBe(false);
+
+    release(quotaSnapshot(at, 0, 0));
+    await stopping;
+    expect(closed).toBe(true);
+    expect(starts).toBe(0);
+    expect(taskStatus(database, 'shutdown-during-quota')).toBe('queued');
   });
 
   it('rejects invalid transitions without recording an event', () => {
@@ -332,4 +490,59 @@ function eventStatuses(database: PhantomDatabase, taskId: string): string[] {
       .prepare('SELECT new_status AS newStatus FROM task_events WHERE task_id = ? ORDER BY rowid')
       .all(taskId) as Array<{ newStatus: string }>
   ).map((event) => event.newStatus);
+}
+
+let quotaSequence = 0;
+
+function quotaSnapshot(
+  observedAt: Date,
+  shortUsed: number,
+  weeklyUsed: number,
+  shortReset = new Date(observedAt.getTime() + 300 * 60_000),
+): QuotaSnapshot {
+  quotaSequence += 1;
+  return {
+    id: `quota-${quotaSequence}`,
+    accountId: 'test-account',
+    source: 'read',
+    observedAt: observedAt.toISOString(),
+    windows: [
+      {
+        limitId: 'codex',
+        limitName: null,
+        kind: 'short',
+        usedPercent: shortUsed,
+        remainingPercent: 100 - shortUsed,
+        windowDurationMins: 300,
+        resetsAt: shortReset.toISOString(),
+        planType: 'plus',
+      },
+      {
+        limitId: 'codex',
+        limitName: null,
+        kind: 'weekly',
+        usedPercent: weeklyUsed,
+        remainingPercent: 100 - weeklyUsed,
+        windowDurationMins: 10_080,
+        resetsAt: new Date(observedAt.getTime() + 10_080 * 60_000).toISOString(),
+        planType: 'plus',
+      },
+    ],
+  };
+}
+
+class SequenceQuotaProvider implements QuotaProvider {
+  private index = 0;
+
+  constructor(private readonly values: Array<QuotaSnapshot | Error>) {}
+
+  async read(): Promise<QuotaSnapshot> {
+    const value = this.values[Math.min(this.index, this.values.length - 1)];
+    this.index += 1;
+    if (!value) throw new Error('No quota fixture configured.');
+    if (value instanceof Error) throw value;
+    return value;
+  }
+
+  async close(): Promise<void> {}
 }

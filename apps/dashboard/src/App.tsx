@@ -6,6 +6,7 @@ import {
   type ExecutionEvent,
   type Project,
   type ProjectInput,
+  type QuotaStatus,
   type Task,
   type TaskEvent,
   type TaskInput,
@@ -41,6 +42,7 @@ export function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [paused, setPaused] = useState(false);
   const [worker, setWorker] = useState<WorkerHealth | null>(null);
+  const [quota, setQuota] = useState<QuotaStatus | null>(null);
   const [taskHistory, setTaskHistory] = useState<TaskEvent[]>([]);
   const [taskExecutions, setTaskExecutions] = useState<Execution[]>([]);
   const [executionEvents, setExecutionEvents] = useState<ExecutionEvent[]>([]);
@@ -57,16 +59,18 @@ export function App() {
     if (!silent) setLoading(true);
     setError('');
     try {
-      const [projectRows, taskRows, workerSetting, workerHealth] = await Promise.all([
+      const [projectRows, taskRows, workerSetting, workerHealth, quotaStatus] = await Promise.all([
         api.projects(),
         api.tasks(),
         api.workerSetting(),
         api.workerHealth(),
+        api.quota(),
       ]);
       setProjects(projectRows);
       setTasks(taskRows);
       setPaused(workerSetting.paused);
       setWorker(workerHealth);
+      setQuota(quotaStatus);
       setOffline(false);
     } catch (nextError) {
       setOffline(nextError instanceof ApiRequestError && nextError.offline);
@@ -174,6 +178,7 @@ export function App() {
             tasks={tasks}
             projects={projects}
             worker={worker}
+            quota={quota}
             onCancel={() => void perform(() => api.cancelWorker())}
             onAdd={() => setShowTaskForm(true)}
             onSelect={setSelectedTask}
@@ -321,6 +326,7 @@ function BoardView({
   tasks,
   projects,
   worker,
+  quota,
   onCancel,
   onAdd,
   onSelect,
@@ -329,6 +335,7 @@ function BoardView({
   tasks: Task[];
   projects: Project[];
   worker: WorkerHealth | null;
+  quota: QuotaStatus | null;
   onCancel: () => void;
   onAdd: () => void;
   onSelect: (task: Task) => void;
@@ -340,7 +347,7 @@ function BoardView({
         <div>
           <p className="eyebrow">Local queue</p>
           <h1>Task board</h1>
-          <p>Priority first, then oldest task. The durable fake worker runs one task at a time.</p>
+          <p>Priority first, then oldest task. Fresh live quota gates one Codex task at a time.</p>
         </div>
         <button className="primary" disabled={projects.length === 0} onClick={onAdd}>
           + New task
@@ -356,6 +363,7 @@ function BoardView({
         </div>
       )}
       {worker && <WorkerSummary worker={worker} onCancel={onCancel} />}
+      {quota && <QuotaSummary quota={quota} />}
       {tasks.length === 0 ? (
         <EmptyState
           title="Your queue is clear"
@@ -416,6 +424,41 @@ function BoardView({
         </div>
       )}
     </section>
+  );
+}
+
+function QuotaSummary({ quota }: { quota: QuotaStatus }) {
+  const observed = quota.snapshot
+    ? new Date(quota.snapshot.observedAt).toLocaleTimeString()
+    : 'Never';
+  return (
+    <div className={`quota-summary ${quota.fresh ? '' : 'stale'}`} role="status">
+      <div>
+        <span className="worker-state">{quota.fresh ? 'live' : 'stale'}</span>
+        <strong>Codex quota</strong>
+        <small>Observed {observed}</small>
+      </div>
+      {quota.snapshot?.windows
+        .filter((window) => window.kind !== 'other')
+        .map((window) => (
+          <div key={`${window.limitId}-${window.kind}-${window.windowDurationMins}`}>
+            <small>
+              {window.limitId} · {window.kind}
+            </small>
+            <strong>{window.usedPercent.toFixed(1)}% used</strong>
+            <small>
+              {window.remainingPercent.toFixed(1)}% left · resets{' '}
+              {window.resetsAt ? new Date(window.resetsAt).toLocaleString() : 'unknown'}
+            </small>
+          </div>
+        ))}
+      {quota.error && (
+        <div>
+          <small>Quota provider</small>
+          <strong>{quota.error}</strong>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -784,6 +827,12 @@ function TaskDetails({
               {task.statusReason}
             </div>
           )}
+          {task.quotaWaitUntil && (
+            <div className="reason">
+              <strong>Quota retry</strong>
+              {new Date(task.quotaWaitUntil).toLocaleString()}
+            </div>
+          )}
           <section className="history">
             <h4>Run history</h4>
             {executions.length > 0 && (
@@ -800,6 +849,17 @@ function TaskDetails({
                       <small>
                         {execution.tokenUsage.inputTokens.toLocaleString()} input ·{' '}
                         {execution.tokenUsage.outputTokens.toLocaleString()} output tokens
+                      </small>
+                    )}
+                    {execution.quotaUsageDelta && execution.quotaUsageDelta.length > 0 && (
+                      <small>
+                        Quota:{' '}
+                        {execution.quotaUsageDelta
+                          .map(
+                            (delta) =>
+                              `${delta.limitId} ${delta.kind} ${delta.beforeUsedPercent.toFixed(1)}% → ${delta.afterUsedPercent.toFixed(1)}%`,
+                          )
+                          .join(' · ')}
                       </small>
                     )}
                     {execution.finalResult && (

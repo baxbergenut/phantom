@@ -4,6 +4,10 @@ import path from 'node:path';
 
 import { createApp } from './app.js';
 import { CodexExecutor, codexExecutorConfigFromEnvironment } from './codex-executor.js';
+import {
+  CodexAppServerQuotaProvider,
+  codexAppServerQuotaConfigFromEnvironment,
+} from './codex-app-server-quota.js';
 import { resolveDatabasePath } from './db/index.js';
 import { GitAdapter } from './git-adapter.js';
 
@@ -15,7 +19,8 @@ const executor = new CodexExecutor(
   new GitAdapter(),
 );
 const capability = await executor.checkCapabilities();
-const app = await createApp({ logger: true, executor, databasePath });
+const quotaProvider = new CodexAppServerQuotaProvider(codexAppServerQuotaConfigFromEnvironment());
+const app = await createApp({ logger: true, executor, quotaProvider, databasePath });
 app.log.info(capability, 'Codex capability check passed.');
 
 try {

@@ -1,10 +1,20 @@
 import { sql } from 'drizzle-orm';
-import { check, index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import {
+  check,
+  index,
+  integer,
+  real,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from 'drizzle-orm/sqlite-core';
 
 import type {
   CodexEventKind,
   CodexFinalResult,
+  ComplexityClass,
   ExecutionState,
+  QuotaUsageDelta,
   TaskPriority,
   TaskStatus,
   TokenUsage,
@@ -42,6 +52,8 @@ export const tasks = sqliteTable(
     status: text('status').$type<TaskStatus>().notNull().default('queued'),
     attemptCount: integer('attempt_count').notNull().default(0),
     statusReason: text('status_reason'),
+    complexity: text('complexity').$type<ComplexityClass>().notNull().default('medium'),
+    quotaWaitUntil: text('quota_wait_until'),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
   },
@@ -62,6 +74,37 @@ export const settings = sqliteTable('settings', {
   value: text('value').notNull(),
   updatedAt: text('updated_at').notNull(),
 });
+
+export const quotaSnapshots = sqliteTable(
+  'quota_snapshots',
+  {
+    id: text('id').primaryKey(),
+    accountId: text('account_id'),
+    source: text('source').$type<'read' | 'notification'>().notNull(),
+    observedAt: text('observed_at').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (table) => [index('quota_snapshots_observed_idx').on(table.observedAt)],
+);
+
+export const quotaWindows = sqliteTable(
+  'quota_windows',
+  {
+    id: text('id').primaryKey(),
+    snapshotId: text('snapshot_id')
+      .notNull()
+      .references(() => quotaSnapshots.id, { onDelete: 'cascade' }),
+    limitId: text('limit_id').notNull(),
+    limitName: text('limit_name'),
+    kind: text('kind').$type<'short' | 'weekly' | 'other'>().notNull(),
+    usedPercent: real('used_percent').notNull(),
+    remainingPercent: real('remaining_percent').notNull(),
+    windowDurationMins: integer('window_duration_mins'),
+    resetsAt: text('resets_at'),
+    planType: text('plan_type'),
+  },
+  (table) => [index('quota_windows_snapshot_idx').on(table.snapshotId)],
+);
 
 export const executions = sqliteTable(
   'executions',
@@ -98,6 +141,14 @@ export const executions = sqliteTable(
       authorEmail: string;
       authoredAt: string;
     }>(),
+    quotaBeforeSnapshotId: text('quota_before_snapshot_id').references(() => quotaSnapshots.id, {
+      onDelete: 'set null',
+    }),
+    quotaAfterSnapshotId: text('quota_after_snapshot_id').references(() => quotaSnapshots.id, {
+      onDelete: 'set null',
+    }),
+    quotaUsageDelta: text('quota_usage_delta', { mode: 'json' }).$type<QuotaUsageDelta[]>(),
+    quotaWaitUntil: text('quota_wait_until'),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
   },
