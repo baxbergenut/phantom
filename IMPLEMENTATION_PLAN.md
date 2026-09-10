@@ -99,7 +99,7 @@ boundaries or locked decisions must be recorded in this file.
 - [x] Phase 2 — Persistent single-task scheduler and restart recovery
 - [x] Phase 3 — Codex execution, structured results, and same-thread retries
 - [x] Phase 4 — Git synchronization, commit verification, and direct push
-- [ ] Phase 5 — Live quota integration and reset-aware scheduling
+- [x] Phase 5 — Live quota integration and reset-aware scheduling
 - [ ] Phase 6 — Local complexity classifier and model selection policy
 - [ ] Phase 7 — Telegram reporting
 - [ ] Phase 8 — Windows service packaging, hardening, and release readiness
@@ -377,7 +377,7 @@ work to GitHub, while refusing unsafe repository states.
 
 ## Phase 5 — Live quota integration and reset-aware scheduling
 
-**Status:** Planned
+**Status:** Complete
 
 **Prerequisite:** Phase 4
 
@@ -388,33 +388,33 @@ resume quota-interrupted tasks after the relevant reset.
 
 ### Required work
 
-- [ ] Add a narrow Codex App Server client behind a quota-provider interface.
-- [ ] Implement initialization, request IDs, response correlation, reconnects,
+- [x] Add a narrow Codex App Server client behind a quota-provider interface.
+- [x] Implement initialization, request IDs, response correlation, reconnects,
       timeouts, and clean shutdown.
-- [ ] Read `account/rateLimits/read` and consume rate-limit update notifications.
-- [ ] Support multiple returned buckets rather than assuming array order or a fixed
+- [x] Read `account/rateLimits/read` and consume rate-limit update notifications.
+- [x] Support multiple returned buckets rather than assuming array order or a fixed
       number of limits.
-- [ ] Store snapshots containing limit ID, used percentage, window duration, reset
+- [x] Store snapshots containing limit ID, used percentage, window duration, reset
       timestamp, plan type when supplied, and observation time.
-- [ ] Identify the active short and weekly windows by duration/metadata rather than
+- [x] Identify the active short and weekly windows by duration/metadata rather than
       blindly labeling primary and secondary fields.
-- [ ] Display current consumption, remaining percentage, reset times, and snapshot
+- [x] Display current consumption, remaining percentage, reset times, and snapshot
       freshness in the dashboard.
-- [ ] Take a fresh quota snapshot immediately before dispatch and after every attempt.
-- [ ] If a fresh snapshot cannot be obtained, do not start a new task. Mark it waiting
+- [x] Take a fresh quota snapshot immediately before dispatch and after every attempt.
+- [x] If a fresh snapshot cannot be obtained, do not start a new task. Mark it waiting
       with a clear degraded-service reason.
-- [ ] Implement configurable reserves, initially 15% for the five-hour window and 10%
+- [x] Implement configurable reserves, initially 15% for the five-hour window and 10%
       for the weekly window.
-- [ ] Add initial usage estimates by complexity class: small 10%, medium 20%, large
+- [x] Add initial usage estimates by complexity class: small 10%, medium 20%, large
       35%, very large 50% of usable short-window capacity. Keep these configurable.
-- [ ] Gate dispatch using remaining quota, configured reserves, and the task estimate.
-- [ ] When Codex or the quota provider reports exhaustion, enter `waiting_quota`,
+- [x] Gate dispatch using remaining quota, configured reserves, and the task estimate.
+- [x] When Codex or the quota provider reports exhaustion, enter `waiting_quota`,
       store the reset timestamp, and schedule wakeup with a small safety delay.
-- [ ] On reset, refresh limits and resume the same Codex thread. Do not increment the
+- [x] On reset, refresh limits and resume the same Codex thread. Do not increment the
       normal retry count for quota waits.
-- [ ] Record before/after quota deltas for each execution and prepare the history that
+- [x] Record before/after quota deltas for each execution and prepare the history that
       Phase 6 will use for improved estimates.
-- [ ] Recover reset timers correctly after application or PC restart.
+- [x] Recover reset timers correctly after application or PC restart.
 
 ### Acceptance criteria
 
@@ -614,28 +614,29 @@ and make normal installation, upgrading, backup, and troubleshooting manageable.
 
 Update this section at the end of every phase.
 
-- **Current completed phase:** Phase 4 — Git synchronization, commit verification, and
-  direct push
+- **Current completed phase:** Phase 5 — Live quota integration and reset-aware
+  scheduling
 - **Bootstrap state:** Complete; local `main` tracks `origin/main` on GitHub
-- **Next phase:** Phase 5 — Live quota integration and reset-aware scheduling
-- **Last known good commit:** `7de9573` (Phase 4 implementation; a following
+- **Next phase:** Phase 6 — Local complexity classifier and model selection policy
+- **Last known good commit:** `013f265` (Phase 5 implementation; a following
   bookkeeping commit records phase completion)
 - **How to run:** `npm install`, then `npm start`; open `http://127.0.0.1:4310`.
   For live-reload development, use `npm run dev` and open `http://127.0.0.1:4311`.
 - **How to test:** `npm run format:check`, `npm run lint`, `npm run typecheck`,
   `npm test`, and `npm run build`
-- **Database/schema version:** `0003_phase_four`
-- **Important active decisions:** Every new execution runs Git preflight through
-  argument-array process calls, synchronizes behind branches with fast-forward-only,
-  and blocks dirty, wrong-branch, missing/unreachable-remote, or diverged states.
-  Codex uses danger-full-access because workspace-write cannot create `.git/index.lock`;
-  enabled projects therefore receive a prominent direct-push warning. Completion is
-  independently fetched and verified before success, with local/remote SHAs, changed
-  files, and commit metadata persisted. Push verification failure consumes the one
-  persisted same-thread retry; force-push is never invoked or permitted by contract.
-- **Known issues or limitations:** Rate-limited work remains in `waiting_quota` until
-  Phase 5 adds reset-aware wakeup. Quota is not yet checked before dispatch, and the
-  complexity/model policy remains fixed until Phase 6.
+- **Database/schema version:** `0004_phase_five`
+- **Important active decisions:** Production uses a narrow stdio Codex App Server
+  quota provider. Every dispatch requires a fresh read containing short and weekly
+  windows. All returned buckets are persisted, duration identifies window kind, and
+  sparse notifications merge into the last complete response. Default reserves are
+  15% short and 10% weekly; tasks default to the configurable medium estimate until
+  Phase 6. Quota pauses retain the same execution and Codex thread, store a durable
+  reset time, release the global lease, and resume without increasing retry_count.
+  Before/after deltas accumulate across resumed segments. Startup also repairs Phase
+  3/4 columns skipped by their historical non-monotonic migration timestamps.
+- **Known issues or limitations:** All tasks use the medium quota estimate and the
+  fixed Phase 3 model/reasoning configuration until Phase 6 adds local classification,
+  configurable model tiers, availability fallback, and history-refined estimates.
 
 ## Phase Completion Log
 
@@ -754,4 +755,35 @@ Important decisions: Use danger-full-access as the minimum Codex CLI sandbox cap
 Known limitations / follow-up: Phase 5 must add fresh quota gating, reserves,
   reset-aware same-thread resume, usage deltas, and durable reset recovery before new
   dispatches can account for live limits.
+```
+
+### Phase 5
+
+```text
+Phase: 5 — Live quota integration and reset-aware scheduling
+Completed on: 2026-09-09
+Commit SHA: 013f265
+Summary: Added a narrow reconnecting Codex App Server quota provider with JSON-RPC
+  initialization, request correlation, timeouts, sparse notifications, multi-bucket
+  parsing, and clean shutdown; durable quota snapshots/windows; duration-based short
+  and weekly interpretation; configurable reserves and complexity estimates; fresh
+  pre-dispatch gating; reset-aware same-thread resume; accumulated before/after usage
+  deltas; restart wake timers; quota APIs; and dashboard usage/freshness/history views.
+Verification performed: OpenAI documentation search and installed Codex 0.153.4
+  generated protocol contract inspection; Prettier; ESLint; strict TypeScript checks;
+  49 tests covering bucket interpretation, reserve/clock/reset edges, stale/provider
+  failures, fake App Server initialization, notifications, reconnects, timeouts,
+  short/weekly exhaustion, same-thread quota resume, restart recovery, shutdown races,
+  and prior behavior; production build; fresh migration and upgrade from the existing
+  Phase 2 database shape; npm audit (0 vulnerabilities); read-only live signed-in quota
+  check returning identified 300-minute and 10,080-minute windows.
+Important decisions: Gate all returned short/weekly buckets and fail closed when either
+  window class is missing or stale. Express estimates as a percentage of usable short
+  capacity; use medium until Phase 6. Keep quota waits on the original execution and
+  thread with state recovering plus a durable wake timestamp, while retry_count remains
+  unchanged. Merge sparse updates with the last full read. Repair only schema fields
+  proven missing because the historical Phase 3/4 journal timestamps are non-monotonic.
+Known limitations / follow-up: Phase 6 must replace the default medium estimate with
+  Ollama plus deterministic classification, add configurable model tiers and
+  availability fallback, and refine estimates conservatively from stored quota deltas.
 ```
